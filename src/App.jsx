@@ -251,6 +251,36 @@ export default function App() {
   const loaded = useRef(false);
   const [cloudReady, setCloudReady] = useState(false);
 
+  // ── The Plan — mirrors this month's target/Earned figures from the main
+  // app's Special Ashraf Finances Money page (The Process). We don't have
+  // access to that codebase's goal/ledger logic here, so the main app
+  // publishes a small summary to a shared key and we just read it. ──
+  const PLAN_SUMMARY_KEY = "sa_finance_plan_current_month";
+  const [planSummary, setPlanSummary] = useState(() => {
+    try { const r = localStorage.getItem(PLAN_SUMMARY_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
+  });
+  const [refreshingPlan, setRefreshingPlan] = useState(false);
+  // Pulls both this app's own transaction log AND the main app's published
+  // plan summary from the cloud in one go — one button, both refreshed.
+  const refreshFromMainApp = () => {
+    setRefreshingPlan(true);
+    Promise.all([
+      cloudLoad(PLAN_SUMMARY_KEY).then((remote) => {
+        if (remote) {
+          setPlanSummary(remote);
+          try { localStorage.setItem(PLAN_SUMMARY_KEY, JSON.stringify(remote)); } catch { }
+        }
+      }),
+      cloudLoad(LS_KEY).then((remote) => {
+        if (remote && Array.isArray(remote.txs)) {
+          setFin(remote);
+          store.save(remote);
+        }
+      }),
+    ]).finally(() => setRefreshingPlan(false));
+  };
+  useEffect(() => { refreshFromMainApp(); }, []);
+
   useEffect(() => {
     cloudLoad(LS_KEY).then((remote) => {
       if (remote && Array.isArray(remote.txs)) {
@@ -342,7 +372,7 @@ export default function App() {
 
         {/* ─── Nav ─── */}
         <nav style={{ display: "flex", justifyContent: "center", gap: "6px", marginBottom: "38px" }}>
-          {[["dashboard", "Dashboard"], ["tracking", "Tracking"]].map(([id, label]) => {
+          {[["dashboard", "Dashboard"], ["tracking", "Tracking"], ["plan", "The Plan"]].map(([id, label]) => {
             const active = tab === id;
             return (
               <button key={id} onClick={() => setTab(id)} style={{
@@ -413,6 +443,79 @@ export default function App() {
               </div>
               <FlowChart txs={txs} />
             </section>
+          </div>
+        )}
+
+        {/* ═══════════ THE PLAN ═══════════ */}
+        {tab === "plan" && (
+          <div style={{ animation: "saFadeUp 0.45s ease" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "20px", flexWrap: "wrap", gap: "10px" }}>
+              <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "13px", color: "rgba(201,168,76,0.6)" }}>
+                {planSummary ? planSummary.monthLabel : "—"} · from The Process
+              </div>
+              <button onClick={refreshFromMainApp} disabled={refreshingPlan} style={{
+                background: "none", border: "1px solid rgba(201,168,76,0.3)", borderRadius: "1px",
+                cursor: refreshingPlan ? "default" : "pointer", color: GOLD, fontSize: "11px", fontFamily: "'Cormorant', serif",
+                letterSpacing: "0.14em", padding: "6px 14px", opacity: refreshingPlan ? 0.5 : 1,
+              }}>{refreshingPlan ? "Refreshing…" : "↻ Refresh from Main App"}</button>
+            </div>
+
+            {!planSummary ? (
+              <div style={{ textAlign: "center", padding: "60px 20px", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "16px", color: "rgba(250,248,243,0.3)" }}>
+                No plan published yet — open Special Ashraf Finances in The Process (main app) once to sync this month's target.
+              </div>
+            ) : (() => {
+              const achieved = period((t) => t.date.startsWith(monthKey())).net;
+              const pct = planSummary.target > 0 ? Math.round((achieved / planSummary.target) * 100) : 0;
+              const pctColor = pct >= 100 ? GOLD_LIGHT : pct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+              return (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "22px" }}>
+                    <div style={{
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "22px 22px 18px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                    }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "10px" }}>This Month Target</div>
+                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "28px", fontWeight: 600, color: CREAM }}>
+                        {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
+                      </div>
+                    </div>
+                    <div style={{
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "22px 22px 18px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                    }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "10px" }}>This Month Monthly Needed <span style={{ opacity: 0.6 }}>· "Earned"</span></div>
+                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "28px", fontWeight: 600, color: CREAM }}>
+                        {fmt(planSummary.monthlyNeeded)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <section style={{
+                    textAlign: "center", padding: "34px 20px 30px", marginBottom: "22px",
+                    border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px", position: "relative",
+                    background: "radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.08) 0%, transparent 65%)",
+                  }}>
+                    <div style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.3em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "12px" }}>Earned Achieved So Far</div>
+                    <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "clamp(36px, 6vw, 52px)", fontWeight: 600, color: GOLD_LIGHT, lineHeight: 1 }}>
+                      {fmt(achieved)} <span style={{ fontSize: "14px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
+                    </div>
+                    <div style={{ margin: "18px auto 0", width: "min(320px, 90%)" }}>
+                      <div style={{ height: "6px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${Math.min(100, pct)}%`, background: `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                      </div>
+                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: pctColor, marginTop: "10px" }}>
+                        {pct}% <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", fontStyle: "italic", color: "rgba(201,168,76,0.55)" }}>of target</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "12.5px", color: "rgba(250,248,243,0.3)", textAlign: "center" }}>
+                    Target and Monthly Needed come from The Process · Special Ashraf Finances. Achieved is this month's real "Money In" recorded here in Tracking.
+                  </div>
+                </>
+              );
+            })()}
           </div>
         )}
 
