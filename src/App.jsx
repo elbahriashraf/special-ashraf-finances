@@ -84,6 +84,16 @@ const fmt = (n) => {
 
 /* ─── Fonts + global ─── */
 function GlobalStyle() {
+  useEffect(() => {
+    let tag = document.querySelector('meta[name="viewport"]');
+    if (!tag) {
+      tag = document.createElement("meta");
+      tag.name = "viewport";
+      document.head.appendChild(tag);
+    }
+    tag.content = "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover";
+  }, []);
+
   return (
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Cormorant:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap');
@@ -98,6 +108,29 @@ function GlobalStyle() {
       @keyframes saDiamond { from { transform: rotate(0deg) scale(0.6); opacity: 0; } to { transform: rotate(45deg) scale(1); opacity: 1; } }
       @keyframes saGlowPulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
       @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+      /* ── Mobile ── */
+      @media (max-width: 600px) {
+        .sa-container { padding: 0 14px 60px !important; }
+        .sa-header { padding: 28px 0 20px !important; }
+        .sa-eyebrow { font-size: 9px !important; letter-spacing: 0.32em !important; }
+        .sa-nav { gap: 4px !important; margin-bottom: 24px !important; }
+        .sa-nav-btn { padding: 9px 12px !important; font-size: 11px !important; letter-spacing: 0.1em !important; }
+        .sa-balance-section { padding: 26px 16px 22px !important; margin-bottom: 16px !important; }
+        .sa-split-grid { gap: 10px !important; margin-bottom: 16px !important; }
+        .sa-split-card { padding: 18px 18px 16px !important; }
+        .sa-period-grid { gap: 10px !important; margin-bottom: 18px !important; }
+        .sa-flow-section { padding: 18px 16px 12px !important; }
+        .sa-form-section { padding: 18px 16px 16px !important; margin-bottom: 22px !important; }
+        .sa-form-row { flex-direction: column !important; }
+        .sa-form-row > div { flex: 1 1 auto !important; min-width: 0 !important; width: 100% !important; }
+        .sa-ledger-row { flex-wrap: wrap !important; gap: 6px 10px !important; padding: 12px 14px !important; }
+        .sa-ledger-amt { font-size: 16px !important; }
+        .sa-plan-header { flex-direction: column !important; align-items: flex-start !important; gap: 10px !important; }
+        .sa-plan-grid { gap: 10px !important; }
+        .sa-plan-card { padding: 18px 18px 16px !important; }
+        .sa-plan-achieved { padding: 26px 16px 22px !important; }
+      }
     `}</style>
   );
 }
@@ -355,11 +388,11 @@ export default function App() {
       <GlobalStyle />
       <LuxuryBg />
 
-      <div style={{ position: "relative", zIndex: 1, maxWidth: "880px", margin: "0 auto", padding: "0 22px 80px" }}>
+      <div className="sa-container" style={{ position: "relative", zIndex: 1, maxWidth: "880px", margin: "0 auto", padding: "0 22px 80px" }}>
 
         {/* ─── Header ─── */}
-        <header style={{ textAlign: "center", padding: "46px 0 30px" }}>
-          <div style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.5em", textTransform: "uppercase", color: "rgba(201,168,76,0.7)", marginBottom: "10px" }}>Special Ashraf</div>
+        <header className="sa-header" style={{ textAlign: "center", padding: "46px 0 30px" }}>
+          <div className="sa-eyebrow" style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.5em", textTransform: "uppercase", color: "rgba(201,168,76,0.7)", marginBottom: "10px" }}>Special Ashraf</div>
           <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: "clamp(30px, 5vw, 42px)", fontWeight: 600, letterSpacing: "0.06em", color: CREAM }}>
             F I N A N C E S
           </h1>
@@ -371,17 +404,17 @@ export default function App() {
         </header>
 
         {/* ─── Nav ─── */}
-        <nav style={{ display: "flex", justifyContent: "center", gap: "6px", marginBottom: "38px" }}>
+        <nav className="sa-nav" style={{ display: "flex", justifyContent: "center", gap: "6px", marginBottom: "38px", flexWrap: "wrap" }}>
           {[["dashboard", "Dashboard"], ["tracking", "Tracking"], ["plan", "The Plan"]].map(([id, label]) => {
             const active = tab === id;
             return (
-              <button key={id} onClick={() => setTab(id)} style={{
+              <button key={id} className="sa-nav-btn" onClick={() => setTab(id)} style={{
                 padding: "11px 34px", cursor: "pointer", background: active ? "rgba(201,168,76,0.1)" : "transparent",
                 border: "none", borderBottom: `1px solid ${active ? GOLD : "rgba(201,168,76,0.15)"}`,
                 fontFamily: "'Cormorant', serif", fontSize: "15px", fontWeight: 600,
                 letterSpacing: "0.24em", textTransform: "uppercase",
                 color: active ? GOLD_LIGHT : "rgba(250,248,243,0.4)",
-                transition: "all 0.3s ease",
+                transition: "all 0.3s ease", flex: "0 1 auto",
               }}>{label}</button>
             );
           })}
@@ -392,7 +425,7 @@ export default function App() {
           <div style={{ animation: "saFadeUp 0.45s ease" }}>
 
             {/* Actual balance */}
-            <section style={{
+            <section className="sa-balance-section" style={{
               textAlign: "center", padding: "38px 20px 34px", marginBottom: "22px",
               border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px", position: "relative",
               background: "radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.08) 0%, transparent 65%)",
@@ -406,12 +439,12 @@ export default function App() {
             </section>
 
             {/* 80 / 20 split */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", marginBottom: "22px" }}>
+            <div className="sa-split-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", marginBottom: "22px" }}>
               {[
                 { label: "Invested", pct: "80%", val: invested, note: "Working capital — untouchable" },
                 { label: "To Spend", pct: "20%", val: toSpend, note: "Living allocation" },
               ].map((c) => (
-                <div key={c.label} style={{
+                <div key={c.label} className="sa-split-card" style={{
                   border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "24px 24px 20px",
                   position: "relative", background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
                 }}>
@@ -429,7 +462,7 @@ export default function App() {
             </div>
 
             {/* Period indicators */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "14px", marginBottom: "26px" }}>
+            <div className="sa-period-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "14px", marginBottom: "26px" }}>
               <PeriodChip label="Daily" {...pToday} />
               <PeriodChip label="Last 7 Days" {...p7} />
               <PeriodChip label="This Month" {...pMonth} />
@@ -437,7 +470,7 @@ export default function App() {
             </div>
 
             {/* Flow chart */}
-            <section style={{ border: "1px solid rgba(201,168,76,0.18)", borderRadius: "1px", padding: "22px 22px 14px" }}>
+            <section className="sa-flow-section" style={{ border: "1px solid rgba(201,168,76,0.18)", borderRadius: "1px", padding: "22px 22px 14px" }}>
               <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11.5px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "18px" }}>
                 Net Flow — Last 14 Days
               </div>
@@ -449,7 +482,7 @@ export default function App() {
         {/* ═══════════ THE PLAN ═══════════ */}
         {tab === "plan" && (
           <div style={{ animation: "saFadeUp 0.45s ease" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "20px", flexWrap: "wrap", gap: "10px" }}>
+            <div className="sa-plan-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "20px", flexWrap: "wrap", gap: "10px" }}>
               <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "13px", color: "rgba(201,168,76,0.6)" }}>
                 {planSummary ? planSummary.monthLabel : "—"} · from The Process
               </div>
@@ -470,8 +503,8 @@ export default function App() {
               const pctColor = pct >= 100 ? GOLD_LIGHT : pct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
               return (
                 <>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "22px" }}>
-                    <div style={{
+                  <div className="sa-plan-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "22px" }}>
+                    <div className="sa-plan-card" style={{
                       border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "22px 22px 18px",
                       background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
                     }}>
@@ -480,7 +513,7 @@ export default function App() {
                         {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
                       </div>
                     </div>
-                    <div style={{
+                    <div className="sa-plan-card" style={{
                       border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "22px 22px 18px",
                       background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
                     }}>
@@ -491,7 +524,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <section style={{
+                  <section className="sa-plan-achieved" style={{
                     textAlign: "center", padding: "34px 20px 30px", marginBottom: "22px",
                     border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px", position: "relative",
                     background: "radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.08) 0%, transparent 65%)",
@@ -524,7 +557,7 @@ export default function App() {
           <div style={{ animation: "saFadeUp 0.45s ease" }}>
 
             {/* Entry form */}
-            <section style={{
+            <section className="sa-form-section" style={{
               border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px", padding: "26px 26px 24px", marginBottom: "34px",
               background: "radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.06) 0%, transparent 70%)",
             }}>
@@ -532,7 +565,7 @@ export default function App() {
 
               <FlowToggle value={flow} onChange={setFlow} />
 
-              <div style={{ display: "flex", gap: "12px", marginTop: "16px", flexWrap: "wrap" }}>
+              <div className="sa-form-row" style={{ display: "flex", gap: "12px", marginTop: "16px", flexWrap: "wrap" }}>
                 <div style={{ flex: "0 0 180px", minWidth: "150px" }}>
                   <input
                     type="number" inputMode="decimal" value={amount}
@@ -610,7 +643,7 @@ export default function App() {
                     </span>
                   </div>
                   {list.map((t) => (
-                    <div key={t.id} style={{
+                    <div key={t.id} className="sa-ledger-row" style={{
                       display: "flex", alignItems: "center", gap: "14px",
                       padding: "13px 16px", marginBottom: "8px",
                       border: `1px solid ${t.type === "in" ? "rgba(201,168,76,0.22)" : "rgba(250,248,243,0.1)"}`,
@@ -640,7 +673,7 @@ export default function App() {
                           )}
                         </div>
                       </div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: t.type === "in" ? GOLD_LIGHT : "rgba(250,248,243,0.75)", whiteSpace: "nowrap" }}>
+                      <div className="sa-ledger-amt" style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: t.type === "in" ? GOLD_LIGHT : "rgba(250,248,243,0.75)", whiteSpace: "nowrap" }}>
                         {t.type === "in" ? "+" : "−"}{fmt(t.amount)}
                       </div>
                       <button onClick={() => deleteTx(t.id)} title="Delete" style={{
