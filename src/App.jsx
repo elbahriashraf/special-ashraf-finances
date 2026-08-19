@@ -47,6 +47,11 @@ async function cloudSave(key, val) {
 // Mirrors the main app's GOALS_2026 names, so a spend here can be linked to
 // a goal there — The Process reads this same "sa_finances_v1" cloud record
 // and sums "out" transactions whose linkedGoal matches a goal's name.
+const TX_TYPES_KEY_IN = "sa_tx_types_in";
+const TX_TYPES_KEY_OUT = "sa_tx_types_out";
+const DEFAULT_TX_TYPES_IN = ["Trading", "Business", "Family", "Other"];
+const DEFAULT_TX_TYPES_OUT = ["Trading", "Shopping", "Bills", "Transport", "Loan" ,"Other"];
+
 const LINKABLE_2026_GOALS = [
   "Special Ashraf Self-Date", '"Special" Necklace', '"77" Necklace', "Ramadan Vibes", "Ramadan Food",
   "Special Ashraf Jerseys 1", "Special Ashraf Caps 1", "300$ Wealth", "Special Ashraf Clothes 1",
@@ -347,35 +352,276 @@ export default function App() {
   const pMonth = period((t) => t.date.startsWith(mk));
   const pAll = period(() => true);
 
+  // ── Working days (Mon–Fri) left in the current month, today counted as
+  // still remaining if it's itself a weekday. Computed first since Daily
+  // Target now divides by this real count instead of a flat 20. ──
+  const workingDaysLeft = (() => {
+    const now = new Date();
+    const year = now.getFullYear(), month = now.getMonth();
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    let count = 0;
+    for (let d = now.getDate(); d <= lastDay; d++) {
+      const dow = new Date(year, month, d).getDay(); // 0 Sun … 6 Sat
+      if (dow >= 1 && dow <= 5) count++;
+    }
+    return count;
+  })();
+
+  // ── Daily Target InshaALLAH SWT ──
+  // (This Month Target − money already made this month, NOT counting today)
+  // ÷ real workdays left this month (Mon–Fri only, weekends excluded) — not
+  // a flat 20, so the target genuinely tightens as the month's real
+  // remaining business days shrink. Frozen for the whole calendar day —
+  // today's own earnings don't move the target mid-day, they only move the
+  // "done today" side of the ratio below. Naturally flips at midnight since
+  // it's keyed off tk/mk (and workingDaysLeft recomputes from the real date).
+  const achievedBeforeToday = period((t) => t.date.startsWith(mk) && t.date !== tk).net;
+  const dailyTarget = planSummary && planSummary.target != null && workingDaysLeft > 0
+    ? Math.max(0, (planSummary.target - achievedBeforeToday) / workingDaysLeft)
+    : null;
+
+  const doneTodayMAD = pToday.net;
+  const dailyPct = dailyTarget && dailyTarget > 0
+    ? Math.round((doneTodayMAD / dailyTarget) * 100)
+    : (doneTodayMAD > 0 ? 100 : 0);
+  const dailyPctColor = dailyPct >= 100 ? GOLD_LIGHT : dailyPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+
+  // ── Tomorrow's target — same formula, but with today's earnings folded
+  // into "already made this month" once today is done, and one fewer
+  // workday remaining (tomorrow itself is excluded if it's a weekday, since
+  // by definition it's the day being targeted, not a day "left before it").
+  const workingDaysLeftAfterToday = Math.max(0, workingDaysLeft - (([0, 6].includes(new Date().getDay())) ? 0 : 1));
+  const tomorrowTarget = planSummary && planSummary.target != null && workingDaysLeftAfterToday > 0
+    ? Math.max(0, (planSummary.target - (achievedBeforeToday + doneTodayMAD)) / workingDaysLeftAfterToday)
+    : null;
+
+  // ── Monthly Target — money earned this month vs This Month Target ──
+  const monthlyPct = planSummary && planSummary.target > 0
+    ? Math.round((pMonth.net / planSummary.target) * 100)
+    : 0;
+  const monthlyPctColor = monthlyPct >= 100 ? GOLD_LIGHT : monthlyPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+
+  // ── Yearly Target — money in during the rolling "this age" window vs
+  // Total Surplus target, and actual balance vs Balance-at-End-of-Age target.
+  const yearInAmt = (planSummary && planSummary.yearRangeStartISO)
+    ? txs.filter((t) => t.type === "in" && t.date >= planSummary.yearRangeStartISO && t.date < planSummary.yearRangeEndISO)
+        .reduce((s, t) => s + t.amount, 0)
+    : 0;
+  const yearSurplusPct = planSummary && planSummary.yearSurplusTarget > 0
+    ? Math.round((yearInAmt / planSummary.yearSurplusTarget) * 100) : 0;
+  const yearBalancePct = planSummary && planSummary.yearEndBalanceTarget > 0
+    ? Math.round((balance / planSummary.yearEndBalanceTarget) * 100) : 0;
+  const yearSurplusColor = yearSurplusPct >= 100 ? GOLD_LIGHT : yearSurplusPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+  const yearBalanceColor = yearBalancePct >= 100 ? GOLD_LIGHT : yearBalancePct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+
+  // ── Spending vs the 20% "To Spend" allowance ──
+  // Shows money out against the allowance that period's earnings justify
+  // (money in × 20%), plus the raw difference underneath.
+  const spendFor = (pred) => {
+    const p = period(pred);
+    const allowance = p.inAmt * 0.20;
+    return { out: p.outAmt, allowance, diff: p.outAmt - allowance };
+  };
+
+  // ── Daily allowance ──
+  // This month's 20% allowance, capped at This Month Target, minus whatever
+  // has already gone out this month before today — i.e. what's genuinely
+  // left to spend today rather than a flat share.
+  // The spending "day" runs 6am → 6am, not midnight → midnight: anything
+  // logged between midnight and 5:59am still belongs to the previous day.
+  const spendingDayKey = (() => {
+    const now = new Date();
+    if (now.getHours() < 6) now.setDate(now.getDate() - 1);
+    return now.toISOString().slice(0, 10);
+  })();
+  const isTodaySpending = (t) => {
+    if (!t.ts) return t.date === spendingDayKey;
+    const d = new Date(t.ts);
+    if (d.getHours() < 6) d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10) === spendingDayKey;
+  };
+
+  const monthIn = period((t) => t.date && t.date.startsWith(monthKey())).inAmt;
+  const monthAllowanceCapped = planSummary?.monthlyNeeded != null
+    ? Math.min(monthIn * 0.20, planSummary.monthlyNeeded)
+    : monthIn * 0.20;3
+  const outThisMonthExceptToday = period((t) => t.date && t.date.startsWith(monthKey()) && !isTodaySpending(t)).outAmt;
+  const outToday = period(isTodaySpending).outAmt;
+  const dailyRemainingAllowance = monthAllowanceCapped - outThisMonthExceptToday;
+  const dailyPctOfMonthAllowance = monthAllowanceCapped > 0
+    ? Math.round((outToday / monthAllowanceCapped) * 100)
+    : 0;
+  const spendRows = [
+    { label: "All Time", sub: "Special Ashraf Journey", data: spendFor(() => true) },
+    {
+      label: "Yearly",
+      sub: String(new Date().getFullYear()),
+      // Resets every calendar year. Allowance is capped at This Month
+      // Needed × every month that's happened so far this year (Jan through
+      // the current month, inclusive) — not the raw 20%-of-earnings figure.
+      data: (() => {
+        const curYear = new Date().getFullYear();
+        const curMonth = new Date().getMonth() + 1; // 1-12
+        // The first year of tracking counts from whichever month real data
+        // actually starts (e.g. Aug 2026 = month 1, Sep 2026 = month 2, …).
+        // Every year after that is a full calendar year, so it counts from
+        // January like normal (Jan 2027 = month 1, Feb 2027 = month 2, …).
+        const firstTxDate = txs.length ? txs.reduce((min, t) => (t.date < min ? t.date : min), txs[0].date) : null;
+        const firstTxYear = firstTxDate ? parseInt(firstTxDate.slice(0, 4), 10) : curYear;
+        const firstTxMonth = firstTxDate ? parseInt(firstTxDate.slice(5, 7), 10) : curMonth;
+        const monthsElapsed = curYear === firstTxYear ? (curMonth - firstTxMonth + 1) : curMonth;
+
+        const pYear = period((t) => t.date && t.date.startsWith(String(curYear)));
+        const rawAllowance = pYear.inAmt * 0.20;
+        const cap = planSummary?.monthlyNeeded != null ? planSummary.monthlyNeeded * monthsElapsed : null;
+        const allowance = cap != null ? Math.min(rawAllowance, cap) : rawAllowance;
+        return { out: pYear.outAmt, allowance, diff: pYear.outAmt - allowance };
+      })(),
+    },
+    {
+      label: "Monthly",
+      sub: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+      data: (() => {
+        const p = period((t) => t.date && t.date.startsWith(monthKey()));
+        const rawAllowance = p.inAmt * 0.20;
+        const allowance = planSummary?.monthlyNeeded != null ? Math.min(rawAllowance, planSummary.monthlyNeeded) : rawAllowance;
+        return { out: p.outAmt, allowance, diff: p.outAmt - allowance };
+      })(),
+    },
+    {
+      label: "Daily",
+      sub: new Date(spendingDayKey + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      data: { out: outToday, allowance: dailyRemainingAllowance, diff: outToday - dailyRemainingAllowance },
+      showPct: dailyPctOfMonthAllowance,
+    },
+  ];
+
   /* ─── Tracking form state ─── */
   const [amount, setAmount] = useState("");
   const [comment, setComment] = useState("");
   const [flow, setFlow] = useState("in");
-  const [linkedGoal, setLinkedGoal] = useState("");
+  const [incomeType, setIncomeType] = useState("");
+  const [txTypeAttempted, setTxTypeAttempted] = useState(false); // shows the required-cue only after a failed submit, not on first load
+  const [txTypesIn, setTxTypesIn] = useState(() => {
+    try { const r = localStorage.getItem(TX_TYPES_KEY_IN); return r ? JSON.parse(r) : DEFAULT_TX_TYPES_IN; } catch { return DEFAULT_TX_TYPES_IN; }
+  });
+  const [txTypesOut, setTxTypesOut] = useState(() => {
+    try { const r = localStorage.getItem(TX_TYPES_KEY_OUT); return r ? JSON.parse(r) : DEFAULT_TX_TYPES_OUT; } catch { return DEFAULT_TX_TYPES_OUT; }
+  });
+  const [addingNewType, setAddingNewType] = useState(false);
+  const [newTypeDraft, setNewTypeDraft] = useState("");
+
+  useEffect(() => {
+    cloudLoad(TX_TYPES_KEY_IN).then((remote) => {
+      if (Array.isArray(remote) && remote.length) {
+        setTxTypesIn(remote);
+        try { localStorage.setItem(TX_TYPES_KEY_IN, JSON.stringify(remote)); } catch { }
+      }
+    });
+    cloudLoad(TX_TYPES_KEY_OUT).then((remote) => {
+      if (Array.isArray(remote) && remote.length) {
+        setTxTypesOut(remote);
+        try { localStorage.setItem(TX_TYPES_KEY_OUT, JSON.stringify(remote)); } catch { }
+      }
+    });
+  }, []);
+
+  const txTypes = flow === "in" ? txTypesIn : txTypesOut;
+  const commitNewType = () => {
+    const name = newTypeDraft.trim();
+    if (!name) { setAddingNewType(false); return; }
+    const key = flow === "in" ? TX_TYPES_KEY_IN : TX_TYPES_KEY_OUT;
+    const setter = flow === "in" ? setTxTypesIn : setTxTypesOut;
+    setter((prev) => {
+      if (prev.includes(name)) return prev;
+      const next = [...prev, name];
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch { }
+      cloudSave(key, next);
+      return next;
+    });
+    setIncomeType(name);
+    setNewTypeDraft("");
+    setAddingNewType(false);
+  };
 
   const addTx = () => {
     const val = parseFloat(amount);
     if (!val || val <= 0) return;
+    if (!incomeType) { setTxTypeAttempted(true); return; } // type is mandatory now, for both flows
     const tx = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       type: flow, amount: val,
       comment: comment.trim(),
-      linkedGoal: flow === "out" ? (linkedGoal || null) : null,
+      incomeType,
       date: todayKey(),
       ts: Date.now(),
     };
     setFin((p) => ({ ...p, txs: [tx, ...p.txs] }));
-    setAmount(""); setComment(""); setLinkedGoal("");
+    setAmount(""); setComment(""); setIncomeType(""); setTxTypeAttempted(false);
   };
 
   const deleteTx = (id) => setFin((p) => ({ ...p, txs: p.txs.filter((t) => t.id !== id) }));
 
-  /* ─── Grouped ledger ─── */
-  const grouped = useMemo(() => {
-    const g = {};
-    txs.forEach((t) => { (g[t.date] = g[t.date] || []).push(t); });
-    return Object.entries(g).sort((a, b) => b[0].localeCompare(a[0]));
+  /* ─── Search + sort ───
+     Independent Year / Month / Day pickers in a calendar-style panel — any
+     subset can be set: month only, month+day (any year), year only, or all
+     three, or none (shows everything). Each field is matched only if set. */
+  const [sortBy, setSortBy] = useState("newest");
+  const [filterYear, setFilterYear] = useState("");   // "YYYY" or ""
+  const [filterMonth, setFilterMonth] = useState("");  // "01".."12" or ""
+  const [filterDay, setFilterDay] = useState("");     // "01".."31" or ""
+  const [datePanelOpen, setDatePanelOpen] = useState(false);
+
+  const [flowFilter, setFlowFilter] = useState("all"); // "all" | "in" | "out"
+
+  const matchesSearch = (t) => {
+    if (flowFilter !== "all" && t.type !== flowFilter) return false;
+    if (filterYear && t.date.slice(0, 4) !== filterYear) return false;
+    if (filterMonth && t.date.slice(5, 7) !== filterMonth) return false;
+    if (filterDay && t.date.slice(8, 10) !== filterDay) return false;
+    return true;
+  };
+
+  const filteredTxs = useMemo(() => txs.filter(matchesSearch), [txs, filterYear, filterMonth, filterDay, flowFilter]);
+
+  const availableYears = useMemo(() => {
+    const s = new Set(txs.map((t) => t.date.slice(0, 4)));
+    const arr = Array.from(s).sort((a, b) => b.localeCompare(a));
+    const thisYear = String(new Date().getFullYear());
+    if (!arr.includes(thisYear)) arr.unshift(thisYear);
+    return arr;
   }, [txs]);
+
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const daysInSelectedMonth = filterMonth ? new Date(2024, parseInt(filterMonth, 10), 0).getDate() : 31;
+
+  const dateFilterSummary = (() => {
+    const parts = [];
+    if (filterMonth) parts.push(MONTH_NAMES[parseInt(filterMonth, 10) - 1]);
+    if (filterDay) parts.push(filterDay);
+    if (filterYear) parts.push(filterYear);
+    return parts.length ? parts.join(" ") : null;
+  })();
+
+  const sortedTxs = useMemo(() => {
+    const arr = [...filteredTxs];
+    if (sortBy === "oldest") arr.sort((a, b) => a.ts - b.ts);
+    else if (sortBy === "amount_high") arr.sort((a, b) => b.amount - a.amount);
+    else if (sortBy === "amount_low") arr.sort((a, b) => a.amount - b.amount);
+    else arr.sort((a, b) => b.ts - a.ts); // newest
+    return arr;
+  }, [filteredTxs, sortBy]);
+
+  const isAmountSort = sortBy === "amount_high" || sortBy === "amount_low";
+
+  /* ─── Grouped ledger — only used for date-based sorts; amount sorts show
+     a flat list instead, since amount ordering cuts across day groups. ─── */
+  const grouped = useMemo(() => {
+    if (isAmountSort) return null;
+    const g = {};
+    sortedTxs.forEach((t) => { (g[t.date] = g[t.date] || []).push(t); });
+    return Object.entries(g).sort((a, b) => sortBy === "oldest" ? a[0].localeCompare(b[0]) : b[0].localeCompare(a[0]));
+  }, [sortedTxs, sortBy, isAmountSort]);
 
   const dateLabel = (key) => {
     if (key === tk) return "Today";
@@ -436,30 +682,140 @@ export default function App() {
                 {fmt(balance)}
               </div>
               <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "15px", letterSpacing: "0.2em", color: "rgba(201,168,76,0.7)", marginTop: "10px" }}>{CURRENCY}</div>
+
+              {/* Invested / To Spend */}
+              <div style={{ display: "flex", justifyContent: "center", gap: "28px", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid rgba(201,168,76,0.15)" }}>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "6px" }}>Invested · 80%</div>
+                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "20px", fontWeight: 600, color: CREAM }}>
+                    {fmt(invested)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                  </div>
+                </div>
+                <div style={{ width: "1px", background: "rgba(201,168,76,0.2)" }} />
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "6px" }}>To Spend · 20%</div>
+                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "20px", fontWeight: 600, color: CREAM }}>
+                    {fmt(toSpend)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                  </div>
+                </div>
+              </div>
             </section>
 
-            {/* 80 / 20 split */}
-            <div className="sa-split-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", marginBottom: "22px" }}>
-              {[
-                { label: "Invested", pct: "80%", val: invested, note: "Working capital — untouchable" },
-                { label: "To Spend", pct: "20%", val: toSpend, note: "Living allocation" },
-              ].map((c) => (
-                <div key={c.label} className="sa-split-card" style={{
-                  border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "24px 24px 20px",
-                  position: "relative", background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+            {/* Daily Target InshaALLAH SWT + Daily Spending — side by side */}
+            <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "22px" }}>
+              {dailyTarget != null && (
+                <section className="sa-balance-section" style={{
+                  flex: "1 1 260px", textAlign: "center", padding: "26px 20px",
+                  border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                  background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                  minHeight: "190px", boxSizing: "border-box",
+                  display: "flex", flexDirection: "column", justifyContent: "center",
                 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "12px" }}>
-                    <span style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.26em", textTransform: "uppercase", color: "rgba(201,168,76,0.8)" }}>{c.label}</span>
-                    <span style={{ fontFamily: "'Playfair Display', serif", fontStyle: "italic", fontSize: "14px", color: "rgba(201,168,76,0.55)" }}>{c.pct}</span>
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
+                    Daily Target InshaALLAH SWT
+                    <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                      {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                      {tomorrowTarget != null && (
+                        <span style={{ color: "rgba(201,168,76,0.4)" }}> · tomorrow {fmt(tomorrowTarget)} {CURRENCY}</span>
+                      )}
+                    </span>
                   </div>
-                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "30px", fontWeight: 600, color: CREAM }}>
-                    {fmt(c.val)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", letterSpacing: "0.12em", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
+                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600, color: CREAM }}>
+                    {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
                   </div>
-                  <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "13.5px", color: "rgba(250,248,243,0.35)", marginTop: "8px" }}>{c.note}</div>
-                  <div style={{ position: "absolute", bottom: 0, left: 0, height: "2px", width: c.pct, maxWidth: "100%", background: `linear-gradient(90deg, ${GOLD}, transparent)`, opacity: 0.5 }} />
-                </div>
-              ))}
+                  <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
+                    <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                    </div>
+                    <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, color: dailyPctColor, marginTop: "8px" }}>
+                      {dailyPct}%
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {(() => {
+                const dailyRow = spendRows.find((r) => r.label === "Daily");
+                if (!dailyRow || !dailyRow.data) return null;
+                const { out, allowance, diff } = dailyRow.data;
+                const over = diff > 0;
+                const c = over ? "#C0392B" : "#4A7C59";
+                return (
+                  <section className="sa-balance-section" style={{
+                    flex: "1 1 260px", textAlign: "center", padding: "26px 20px",
+                    border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                    background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                    minHeight: "190px", boxSizing: "border-box",
+                    display: "flex", flexDirection: "column", justifyContent: "center",
+                  }}>
+                    <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
+                      Daily Spending
+                      {dailyRow.sub && (
+                        <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                          {dailyRow.sub}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600, color: c }}>
+                      {fmt(Math.round(out))} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(Math.round(allowance))} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                    </div>
+                    <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
+                      <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${allowance > 0 ? Math.min(100, Math.round((out / allowance) * 100)) : 0}%`, background: over ? "linear-gradient(90deg, #8B2E22, #C0392B)" : `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                      </div>
+                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, color: c, marginTop: "8px" }}>
+                        {dailyRow.showPct != null
+                          ? `${dailyRow.showPct}%`
+                          : <>{over ? "−" : ""}{fmt(Math.abs(Math.round(diff)))} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span></>
+                        }
+                      </div>
+                    </div>
+                  </section>
+                );
+              })()}
             </div>
+
+            {/* Spending — over/under the 20% allowance */}
+            <section className="sa-balance-section" style={{
+              textAlign: "center", padding: "26px 20px", marginBottom: "22px",
+              border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+              background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+              minHeight: "190px", boxSizing: "border-box",
+              display: "flex", flexDirection: "column", justifyContent: "center",
+            }}>
+              <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "18px" }}>
+                Spending
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "18px" }}>
+                {spendRows.map((r) => {
+                  if (!r.data) return null;
+                  const { out, allowance, diff } = r.data;
+                  const over = diff > 0;
+                  const c = over ? "#C0392B" : "#4A7C59";
+                  return (
+                    <div key={r.label} style={{ textAlign: "center" }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)", marginBottom: "6px", lineHeight: 1.3 }}>
+                        {r.label}
+                        {r.sub && (
+                          <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "9px", color: "rgba(201,168,76,0.4)" }}>
+                            {r.sub}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 600, color: c }}>
+                        {fmt(Math.round(out))} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(Math.round(allowance))} <span style={{ fontSize: "10px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                      </div>
+                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "12px", fontWeight: 600, color: c, marginTop: "4px" }}>
+                        {r.showPct != null
+                          ? `${r.showPct}%`
+                          : <>{over ? "−" : ""}{fmt(Math.abs(Math.round(diff)))} <span style={{ fontSize: "9px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span></>
+                        }
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
 
             {/* Period indicators */}
             <div className="sa-period-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "14px", marginBottom: "26px" }}>
@@ -517,35 +873,112 @@ export default function App() {
                       border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "22px 22px 18px",
                       background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
                     }}>
-                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "10px" }}>This Month Monthly Needed <span style={{ opacity: 0.6 }}>· "Earned"</span></div>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "10px" }}>This Month Needed</div>
                       <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "28px", fontWeight: 600, color: CREAM }}>
                         {fmt(planSummary.monthlyNeeded)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
                       </div>
                     </div>
                   </div>
 
-                  <section className="sa-plan-achieved" style={{
-                    textAlign: "center", padding: "34px 20px 30px", marginBottom: "22px",
-                    border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px", position: "relative",
-                    background: "radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.08) 0%, transparent 65%)",
-                  }}>
-                    <div style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.3em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "12px" }}>Earned Achieved So Far</div>
-                    <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "clamp(36px, 6vw, 52px)", fontWeight: 600, color: GOLD_LIGHT, lineHeight: 1 }}>
-                      {fmt(achieved)} <span style={{ fontSize: "14px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
-                    </div>
-                    <div style={{ margin: "18px auto 0", width: "min(320px, 90%)" }}>
-                      <div style={{ height: "6px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${Math.min(100, pct)}%`, background: `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                  {/* Daily Target InshaALLAH SWT */}
+                  {dailyTarget != null && (
+                    <section className="sa-balance-section" style={{
+                      textAlign: "center", padding: "26px 20px", marginBottom: "16px",
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                      minHeight: "190px", boxSizing: "border-box",
+                      display: "flex", flexDirection: "column", justifyContent: "center",
+                    }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
+                        Daily Target InshaALLAH SWT
+                        <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                          {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                          {tomorrowTarget != null && (
+                            <span style={{ color: "rgba(201,168,76,0.4)" }}> · tomorrow {fmt(tomorrowTarget)} {CURRENCY}</span>
+                          )}
+                        </span>
                       </div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: pctColor, marginTop: "10px" }}>
-                        {pct}% <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", fontStyle: "italic", color: "rgba(201,168,76,0.55)" }}>of target</span>
+                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600, color: CREAM }}>
+                        {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
                       </div>
-                    </div>
-                  </section>
+                      <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
+                        <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                        </div>
+                        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, color: dailyPctColor, marginTop: "8px" }}>
+                          {dailyPct}%
+                        </div>
+                      </div>
+                    </section>
+                  )}
 
-                  <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "12.5px", color: "rgba(250,248,243,0.3)", textAlign: "center" }}>
-                    Target and Monthly Needed come from The Process · Special Ashraf Finances. Achieved is this month's real "Money In" recorded here in Tracking.
-                  </div>
+                  {/* Monthly Target */}
+                  {planSummary && planSummary.target != null && (
+                    <section className="sa-balance-section" style={{
+                      textAlign: "center", padding: "26px 20px", marginBottom: "22px",
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                      minHeight: "190px", boxSizing: "border-box",
+                      display: "flex", flexDirection: "column", justifyContent: "center",
+                    }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
+                        Monthly Target
+                        <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                          {new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })} <span style={{ color: "rgba(201,168,76,0.4)" }}>(-{workingDaysLeft})</span>
+                        </span>
+                      </div>
+                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600, color: CREAM }}>
+                        {fmt(pMonth.net)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                      </div>
+                      <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
+                        <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.min(100, monthlyPct)}%`, background: `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                        </div>
+                        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, color: monthlyPctColor, marginTop: "8px" }}>
+                          {monthlyPct}%
+                        </div>
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Yearly Target */}
+                  {planSummary && planSummary.yearSurplusTarget != null && (
+                    <section className="sa-balance-section" style={{
+                      textAlign: "center", padding: "26px 20px", marginBottom: "22px",
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                      minHeight: "190px", boxSizing: "border-box",
+                      display: "flex", flexDirection: "column", justifyContent: "center",
+                    }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "18px", lineHeight: 1.3 }}>
+                        Yearly Target
+                        <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                          {planSummary.yearRangeLabel}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "center", gap: "28px", flexWrap: "wrap" }}>
+                        <div style={{ textAlign: "center", flex: "1 1 160px" }}>
+                          <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)", marginBottom: "6px" }}>
+                            Target to Earn
+                          </div>
+                          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: CREAM }}>
+                            {fmt(yearInAmt)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(planSummary.yearSurplusTarget)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                          </div>
+                          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "13px", fontWeight: 600, color: yearSurplusColor, marginTop: "6px" }}>{yearSurplusPct}%</div>
+                        </div>
+                        <div style={{ width: "1px", background: "rgba(201,168,76,0.2)" }} />
+                        <div style={{ textAlign: "center", flex: "1 1 160px" }}>
+                          <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)", marginBottom: "6px" }}>
+                            Target Balance
+                          </div>
+                          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: CREAM }}>
+                            {fmt(balance)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(planSummary.yearEndBalanceTarget)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                          </div>
+                          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "13px", fontWeight: 600, color: yearBalanceColor, marginTop: "6px" }}>{yearBalancePct}%</div>
+                        </div>
+                      </div>
+                    </section>
+                  )}
                 </>
               );
             })()}
@@ -563,7 +996,7 @@ export default function App() {
             }}>
               <div style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.3em", textTransform: "uppercase", color: "rgba(201,168,76,0.8)", marginBottom: "20px" }}>Record Movement</div>
 
-              <FlowToggle value={flow} onChange={setFlow} />
+              <FlowToggle value={flow} onChange={(v) => { setFlow(v); setIncomeType(""); setTxTypeAttempted(false); }} />
 
               <div className="sa-form-row" style={{ display: "flex", gap: "12px", marginTop: "16px", flexWrap: "wrap" }}>
                 <div style={{ flex: "0 0 180px", minWidth: "150px" }}>
@@ -592,28 +1025,47 @@ export default function App() {
                     }}
                   />
                 </div>
-              </div>
-
-              {flow === "out" && (
-                <div style={{ marginTop: "12px" }}>
-                  <select
-                    value={linkedGoal}
-                    onChange={(e) => setLinkedGoal(e.target.value)}
-                    style={{
-                      width: "100%", padding: "12px 14px", background: "rgba(250,248,243,0.03)",
-                      border: "1px solid rgba(201,168,76,0.18)", borderRadius: "1px",
-                      fontFamily: "'Cormorant', serif", fontStyle: linkedGoal ? "normal" : "italic",
-                      fontSize: "14px", color: linkedGoal ? CREAM : "rgba(250,248,243,0.4)",
-                      appearance: "none", cursor: "pointer",
-                    }}
-                  >
-                    <option value="" style={{ background: INK, fontStyle: "italic" }}>Link to a 2026 Goal (optional)</option>
-                    {LINKABLE_2026_GOALS.map((g) => (
-                      <option key={g} value={g} style={{ background: INK, fontStyle: "normal" }}>{g}</option>
-                    ))}
-                  </select>
+                <div style={{ flex: "0 0 170px", minWidth: "150px" }}>
+                  {addingNewType ? (
+                    <input
+                      autoFocus
+                      value={newTypeDraft}
+                      onChange={(e) => setNewTypeDraft(e.target.value)}
+                      onBlur={commitNewType}
+                      onKeyDown={(e) => { if (e.key === "Enter") commitNewType(); if (e.key === "Escape") { setAddingNewType(false); setNewTypeDraft(""); } }}
+                      placeholder="New type name…"
+                      style={{
+                        width: "100%", padding: "14px 14px", background: "rgba(250,248,243,0.03)",
+                        border: "1px solid rgba(201,168,76,0.4)", borderRadius: "1px",
+                        fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "14px", color: CREAM,
+                      }}
+                    />
+                  ) : (
+                    <select
+                      value={incomeType}
+                      onChange={(e) => {
+                        if (e.target.value === "__add_new__") { setAddingNewType(true); return; }
+                        setIncomeType(e.target.value);
+                        setTxTypeAttempted(false);
+                      }}
+                      style={{
+                        width: "100%", padding: "14px 14px", background: "rgba(250,248,243,0.03)",
+                        border: `1px solid ${txTypeAttempted && !incomeType ? "#C0392B" : "rgba(201,168,76,0.18)"}`,
+                        borderRadius: "1px",
+                        fontFamily: "'Cormorant', serif", fontStyle: incomeType ? "normal" : "italic",
+                        fontSize: "14px", color: incomeType ? CREAM : (txTypeAttempted ? "#E88" : "rgba(250,248,243,0.4)"),
+                        appearance: "none", cursor: "pointer",
+                      }}
+                    >
+                      <option value="" style={{ background: INK, fontStyle: "italic" }}>Type *</option>
+                      {txTypes.map((t) => (
+                        <option key={t} value={t} style={{ background: INK, fontStyle: "normal" }}>{t}</option>
+                      ))}
+                      <option value="__add_new__" style={{ background: INK, fontStyle: "italic", color: GOLD }}>+ Add new type…</option>
+                    </select>
+                  )}
                 </div>
-              )}
+              </div>
 
               <button onClick={addTx} style={{
                 marginTop: "16px", width: "100%", padding: "15px", cursor: "pointer",
@@ -627,21 +1079,173 @@ export default function App() {
               </button>
             </section>
 
+            {/* Search + Sort */}
+            <div style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap", alignItems: "center", position: "relative" }}>
+              <button onClick={() => setDatePanelOpen((v) => !v)} style={{
+                display: "flex", alignItems: "center", gap: "8px", padding: "10px 16px", cursor: "pointer",
+                background: dateFilterSummary ? "rgba(201,168,76,0.12)" : "rgba(250,248,243,0.03)",
+                border: `1px solid ${dateFilterSummary ? "rgba(201,168,76,0.5)" : "rgba(201,168,76,0.18)"}`,
+                borderRadius: "1px",
+                fontFamily: "'Cormorant', serif", fontSize: "14px",
+                color: dateFilterSummary ? GOLD_LIGHT : "rgba(250,248,243,0.55)",
+              }}>
+                <span>📅</span>
+                <span style={{ fontStyle: dateFilterSummary ? "normal" : "italic" }}>{dateFilterSummary || "All Dates"}</span>
+              </button>
+              {dateFilterSummary && (
+                <button onClick={() => { setFilterYear(""); setFilterMonth(""); setFilterDay(""); }} title="Clear" style={{
+                  background: "transparent", border: "none", cursor: "pointer",
+                  color: "rgba(250,248,243,0.4)", fontSize: "13px", fontFamily: "'Cormorant', serif",
+                }}>✕ clear</button>
+              )}
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                style={{
+                  padding: "10px 14px", background: "rgba(250,248,243,0.03)", border: "1px solid rgba(201,168,76,0.18)", borderRadius: "1px",
+                  fontFamily: "'Cormorant', serif", fontSize: "13px", letterSpacing: "0.06em", textTransform: "uppercase",
+                  color: GOLD, appearance: "none", cursor: "pointer", marginLeft: "auto",
+                }}
+              >
+                <option value="newest" style={{ background: INK }}>Newest First</option>
+                <option value="oldest" style={{ background: INK }}>Oldest First</option>
+                <option value="amount_high" style={{ background: INK }}>Amount: High → Low</option>
+                <option value="amount_low" style={{ background: INK }}>Amount: Low → High</option>
+              </select>
+              <div style={{ display: "flex", gap: "4px" }}>
+                {[["all", "All"], ["in", "Money In"], ["out", "Money Out"]].map(([id, label]) => {
+                  const active = flowFilter === id;
+                  return (
+                    <button key={id} onClick={() => setFlowFilter(id)} style={{
+                      padding: "10px 14px", cursor: "pointer",
+                      background: active ? "rgba(201,168,76,0.12)" : "transparent",
+                      border: `1px solid ${active ? "rgba(201,168,76,0.5)" : "rgba(201,168,76,0.18)"}`,
+                      borderRadius: "1px",
+                      fontFamily: "'Cormorant', serif", fontSize: "12.5px", letterSpacing: "0.06em", textTransform: "uppercase",
+                      color: active ? GOLD_LIGHT : "rgba(250,248,243,0.4)",
+                      transition: "all 0.2s ease", whiteSpace: "nowrap",
+                    }}>{label}</button>
+                  );
+                })}
+              </div>
+
+              {datePanelOpen && (
+                <div style={{
+                  position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 20,
+                  width: "min(340px, 90vw)", padding: "18px",
+                  background: INK, border: "1px solid rgba(201,168,76,0.35)", borderRadius: "1px",
+                  boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+                }}>
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.6)", marginBottom: "10px" }}>Year</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "18px" }}>
+                    {availableYears.map((y) => (
+                      <button key={y} onClick={() => setFilterYear(filterYear === y ? "" : y)} style={{
+                        padding: "6px 12px", cursor: "pointer",
+                        background: filterYear === y ? "rgba(201,168,76,0.18)" : "transparent",
+                        border: `1px solid ${filterYear === y ? GOLD : "rgba(201,168,76,0.2)"}`,
+                        borderRadius: "1px", fontFamily: "'Playfair Display', serif", fontSize: "13px",
+                        color: filterYear === y ? GOLD_LIGHT : "rgba(250,248,243,0.55)",
+                      }}>{y}</button>
+                    ))}
+                  </div>
+
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.6)", marginBottom: "10px" }}>Month</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px", marginBottom: "18px" }}>
+                    {MONTH_NAMES.map((name, i) => {
+                      const mm = String(i + 1).padStart(2, "0");
+                      const active = filterMonth === mm;
+                      return (
+                        <button key={mm} onClick={() => { setFilterMonth(active ? "" : mm); if (active) setFilterDay(""); }} style={{
+                          padding: "8px 4px", cursor: "pointer",
+                          background: active ? "rgba(201,168,76,0.18)" : "transparent",
+                          border: `1px solid ${active ? GOLD : "rgba(201,168,76,0.2)"}`,
+                          borderRadius: "1px", fontFamily: "'Cormorant', serif", fontSize: "13px",
+                          color: active ? GOLD_LIGHT : "rgba(250,248,243,0.55)",
+                        }}>{name}</button>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.6)", marginBottom: "10px" }}>Day</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "5px", marginBottom: "18px" }}>
+                    {Array.from({ length: daysInSelectedMonth }, (_, i) => i + 1).map((d) => {
+                      const dd = String(d).padStart(2, "0");
+                      const active = filterDay === dd;
+                      return (
+                        <button key={dd} onClick={() => setFilterDay(active ? "" : dd)} style={{
+                          padding: "6px 0", cursor: "pointer",
+                          background: active ? "rgba(201,168,76,0.18)" : "transparent",
+                          border: `1px solid ${active ? GOLD : "rgba(201,168,76,0.15)"}`,
+                          borderRadius: "1px", fontFamily: "'Cormorant', serif", fontSize: "12px",
+                          color: active ? GOLD_LIGHT : "rgba(250,248,243,0.5)",
+                        }}>{d}</button>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "10px" }}>
+                    <button onClick={() => { setFilterYear(""); setFilterMonth(""); setFilterDay(""); }} style={{
+                      padding: "8px 16px", background: "none", border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px",
+                      cursor: "pointer", fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.1em",
+                      textTransform: "uppercase", color: "rgba(250,248,243,0.45)",
+                    }}>Clear All</button>
+                    <button onClick={() => setDatePanelOpen(false)} style={{
+                      padding: "8px 20px", background: "rgba(201,168,76,0.14)", border: `1px solid ${GOLD}`, borderRadius: "1px",
+                      cursor: "pointer", fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.1em",
+                      textTransform: "uppercase", color: GOLD_LIGHT,
+                    }}>Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Ledger */}
-            {grouped.length === 0 ? (
+            {sortedTxs.length === 0 ? (
               <div style={{ textAlign: "center", padding: "50px 20px", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "17px", color: "rgba(250,248,243,0.3)" }}>
-                No movements yet. Record the first one above.
+                {txs.length === 0 ? "No movements yet. Record the first one above." : "No movements match that search."}
+              </div>
+            ) : isAmountSort ? (
+              <div style={{ marginBottom: "28px" }}>
+                {sortedTxs.map((t) => (
+                  <div key={t.id} className="sa-ledger-row" style={{
+                    display: "flex", alignItems: "center", gap: "14px",
+                    padding: "13px 16px", marginBottom: "8px",
+                    border: `1px solid ${t.type === "in" ? "rgba(201,168,76,0.22)" : "rgba(250,248,243,0.1)"}`,
+                    borderRadius: "1px",
+                    background: t.type === "in" ? "linear-gradient(90deg, rgba(201,168,76,0.06), transparent 60%)" : "transparent",
+                  }}>
+                    <span style={{
+                      width: "7px", height: "7px", flexShrink: 0, transform: "rotate(45deg)",
+                      background: t.type === "in" ? GOLD : "transparent",
+                      border: `1.5px solid ${t.type === "in" ? GOLD : "rgba(250,248,243,0.4)"}`,
+                    }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "16px", color: CREAM, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {t.comment || <span style={{ fontStyle: "italic", color: "rgba(250,248,243,0.3)" }}>No comment</span>}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.12em", color: "rgba(250,248,243,0.3)" }}>
+                          {dateLabel(t.date)} · {new Date(t.ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="sa-ledger-amt" style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: t.type === "in" ? GOLD_LIGHT : "rgba(250,248,243,0.75)", whiteSpace: "nowrap" }}>
+                      {t.type === "in" ? "+" : "−"}{fmt(t.amount)}
+                    </div>
+                    <button onClick={() => deleteTx(t.id)} title="Delete" style={{
+                      background: "transparent", border: "none", cursor: "pointer",
+                      color: "rgba(250,248,243,0.25)", fontSize: "16px", padding: "4px 6px",
+                      fontFamily: "'Cormorant', serif", transition: "color 0.2s",
+                    }}
+                      onMouseEnter={(e) => e.currentTarget.style.color = "rgba(201,168,76,0.9)"}
+                      onMouseLeave={(e) => e.currentTarget.style.color = "rgba(250,248,243,0.25)"}
+                    >×</button>
+                  </div>
+                ))}
               </div>
             ) : grouped.map(([date, list]) => {
-              const dayNet = list.reduce((a, t) => a + (t.type === "in" ? t.amount : -t.amount), 0);
               return (
                 <div key={date} style={{ marginBottom: "28px" }}>
-                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px", paddingBottom: "8px", borderBottom: "1px solid rgba(201,168,76,0.15)" }}>
-                    <span style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 500, letterSpacing: "0.06em", color: "rgba(201,168,76,0.9)" }}>{dateLabel(date)}</span>
-                    <span style={{ fontFamily: "'Cormorant', serif", fontSize: "14px", color: dayNet >= 0 ? "rgba(201,168,76,0.8)" : "rgba(250,248,243,0.5)" }}>
-                      {dayNet > 0 ? "+" : ""}{fmt(dayNet)} {CURRENCY}
-                    </span>
-                  </div>
                   {list.map((t) => (
                     <div key={t.id} className="sa-ledger-row" style={{
                       display: "flex", alignItems: "center", gap: "14px",
@@ -663,13 +1267,12 @@ export default function App() {
                           <span style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.12em", color: "rgba(250,248,243,0.3)" }}>
                             {new Date(t.ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
                           </span>
-                          {t.linkedGoal && (
+                          {t.incomeType && (
                             <span style={{
                               fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px",
                               color: GOLD, border: `1px solid rgba(201,168,76,0.35)`, borderRadius: "1px",
-                              padding: "1px 8px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                              maxWidth: "220px",
-                            }}>◆ {t.linkedGoal}</span>
+                              padding: "1px 8px", whiteSpace: "nowrap",
+                            }}>◆ {t.incomeType}</span>
                           )}
                         </div>
                       </div>
