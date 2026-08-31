@@ -5,6 +5,273 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
    Dark luxury · Gold · Cormorant / Playfair Display
    Data: single state object `fin` → localStorage (Supabase-ready)
    ═══════════════════════════════════════════════════════════════ */
+// ═══════════════════════════════════════════════════════════════
+// TRADING TAB — paste this whole block at top level, above your
+// main App component. Requires GOLD, GOLD_LIGHT, INK, CREAM,
+// CURRENCY, cloudLoad, cloudSave, fmt(n) to already exist in scope
+// (same names your file already uses elsewhere).
+// ═══════════════════════════════════════════════════════════════
+
+const TRADING_LOSS_PCT_KEY = "sa_trading_loss_pcts"; // { daily, weekly, monthly }
+const TRADING_READINESS_KEY_READ = "sa_trading_readiness_today"; // published by the main app
+const MINDSET_RATINGS_KEY_READ = "sa_mindset_ratings"; // published by main/companion app
+const FINANCE_START_DATE = new Date("2026-07-22"); // must match the main app's START_DATE
+
+function TradingTab({ fin, setFin, capital, planSummary, dailyTarget, yearInAmt }) {
+  const [tSubTab, setTSubTab] = useState("dashboard"); // "dashboard" | "tracking"
+  const [amount, setAmount] = useState("");
+  const [comment, setComment] = useState("");
+  const [flow, setFlow] = useState("in");
+
+  const [lossPcts, setLossPcts] = useState(() => {
+    try { const r = localStorage.getItem(TRADING_LOSS_PCT_KEY); return r ? JSON.parse(r) : { daily: 2, weekly: 5, monthly: 10 }; }
+    catch { return { daily: 2, weekly: 5, monthly: 10 }; }
+  });
+  const [editingLossPcts, setEditingLossPcts] = useState(false);
+
+  const [readiness, setReadiness] = useState(null); // { completionRateUntilNow } — published by the main app
+  const [moodPct, setMoodPct] = useState(null); // null = data unavailable, excluded from checklist rather than guessed
+
+  // Salat / Duaa are manual checkboxes now, not derived — reset each day.
+  const TRADING_MANUAL_KEY = "sa_trading_manual_checks";
+  const [manualChecks, setManualChecks] = useState(() => {
+    try {
+      const r = JSON.parse(localStorage.getItem(TRADING_MANUAL_KEY) || "{}");
+      const todayKey = new Date().toISOString().slice(0, 10);
+      return r.date === todayKey ? r : { date: todayKey, salat: false, duaa: false };
+    } catch { return { date: new Date().toISOString().slice(0, 10), salat: false, duaa: false }; }
+  });
+  const toggleManualCheck = (key) => {
+    setManualChecks((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem(TRADING_MANUAL_KEY, JSON.stringify(next)); } catch { }
+      cloudSave(TRADING_MANUAL_KEY, next);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    cloudLoad(TRADING_LOSS_PCT_KEY).then((remote) => {
+      if (remote && typeof remote === "object") {
+        setLossPcts(remote);
+        try { localStorage.setItem(TRADING_LOSS_PCT_KEY, JSON.stringify(remote)); } catch { }
+      }
+    });
+    const pull = () => {
+      cloudLoad(TRADING_READINESS_KEY_READ).then((r) => { if (r) setReadiness(r); });
+      // Mood schema is a best-effort read — if the shape doesn't match what's
+      // expected, moodPct stays null and the checklist item is simply
+      // excluded from scoring rather than silently guessed as pass/fail.
+      cloudLoad("sa_live_mood").then((r) => {
+        // Only trust it if it was published recently (Mood tab needs to be
+        // open for it to update) — otherwise it's a stale reading, and
+        // showing "data unavailable" is more honest than a wrong old number.
+        if (r && typeof r.mood === "number" && r.updatedAt && Date.now() - r.updatedAt < 10 * 60 * 1000) {
+          setMoodPct(Math.round(r.mood));
+        }
+      });
+    };
+    pull();
+    const iv = setInterval(pull, 60000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const saveLossPcts = (next) => {
+    setLossPcts(next);
+    try { localStorage.setItem(TRADING_LOSS_PCT_KEY, JSON.stringify(next)); } catch { }
+    cloudSave(TRADING_LOSS_PCT_KEY, next);
+  };
+
+  const addTradingTx = () => {
+    const val = parseFloat(amount);
+    if (!val || val <= 0) return;
+    const tx = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      type: flow, amount: val,
+      comment: comment.trim(),
+      incomeType: "Trading",
+      date: new Date().toISOString().slice(0, 10),
+      ts: Date.now(),
+    };
+    setFin((p) => ({ ...p, txs: [tx, ...p.txs] }));
+    setAmount(""); setComment("");
+  };
+
+  // ── Trading-only figures ──
+  const txs = fin.txs || [];
+  const tradingTxs = txs.filter((t) => t.incomeType === "Trading");
+  const totalBalance = (capital || 0) + tradingTxs.reduce((s, t) => s + (t.type === "in" ? t.amount : -t.amount), 0);
+  const moneyInAll = tradingTxs.filter((t) => t.type === "in").reduce((s, t) => s + t.amount, 0);
+  const moneyOutAll = tradingTxs.filter((t) => t.type === "out").reduce((s, t) => s + t.amount, 0);
+
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const weekAgoKey = (() => { const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10); })();
+  const monthKey = todayKey.slice(0, 7);
+
+  const netFor = (pred) => {
+    const list = tradingTxs.filter(pred);
+    const inAmt = list.filter((t) => t.type === "in").reduce((s, t) => s + t.amount, 0);
+    const outAmt = list.filter((t) => t.type === "out").reduce((s, t) => s + t.amount, 0);
+    return { in: inAmt, out: outAmt, net: inAmt - outAmt };
+  };
+  const dayStats = netFor((t) => t.date === todayKey);
+  const weekStats = netFor((t) => t.date >= weekAgoKey);
+  const monthStats = netFor((t) => t.date && t.date.startsWith(monthKey));
+  const yearStats = planSummary?.yearRangeStartISO
+    ? netFor((t) => t.date >= planSummary.yearRangeStartISO && t.date < planSummary.yearRangeEndISO)
+    : { in: 0, out: 0, net: 0 };
+  const tradesToday = tradingTxs.filter((t) => t.date === todayKey).length;
+
+  const dailyLossLimit = Math.round(totalBalance * (lossPcts.daily / 100));
+  const weeklyLossLimit = Math.round(totalBalance * (lossPcts.weekly / 100));
+  const monthlyLossLimit = Math.round(totalBalance * (lossPcts.monthly / 100));
+
+  // ── Checklist — each item is a pass/fail, contributing an equal share of 100% ──
+  const checklist = [
+    { label: "Salat is done", checked: !!manualChecks.salat, available: true, manualKey: "salat" },
+    { label: "Duaa is done", checked: !!manualChecks.duaa, available: true, manualKey: "duaa" },
+    { label: moodPct != null ? `Mood is ${moodPct}%` : "Mood", checked: (moodPct ?? 0) >= 80, available: moodPct != null },
+    { label: readiness?.completionRateUntilNow != null ? `Completion rate today is ${readiness.completionRateUntilNow}%` : "Completion rate today", checked: (readiness?.completionRateUntilNow ?? 0) >= 80, available: readiness != null },
+    { label: "Number of trades today", checked: tradesToday < 3, available: true, value: tradesToday, target: 3, pct: Math.round((tradesToday / 3) * 100) },
+    { label: "Daily loss limit", checked: dayStats.out <= dailyLossLimit, available: true, value: dayStats.out, target: dailyLossLimit, pct: dailyLossLimit > 0 ? Math.round((dayStats.out / dailyLossLimit) * 100) : 0 },
+    { label: "Weekly loss limit", checked: weekStats.out <= weeklyLossLimit, available: true, value: weekStats.out, target: weeklyLossLimit, pct: weeklyLossLimit > 0 ? Math.round((weekStats.out / weeklyLossLimit) * 100) : 0 },
+    { label: "Monthly loss limit", checked: monthStats.out <= monthlyLossLimit, available: true, value: monthStats.out, target: monthlyLossLimit, pct: monthlyLossLimit > 0 ? Math.round((monthStats.out / monthlyLossLimit) * 100) : 0 },
+  ];
+  const scoredItems = checklist.filter((c) => c.available);
+  const checkedCount = scoredItems.filter((c) => c.checked).length;
+  const readinessPct = scoredItems.length ? Math.round((checkedCount / scoredItems.length) * 100) : 0;
+  const ableToTrade = readinessPct >= 80;
+
+  return (
+    <div style={{ animation: "saFadeUp 0.45s ease" }}>
+      <>
+        {/* Status */}
+          <div style={{
+            textAlign: "center", padding: "2rem 1rem", marginBottom: "1.75rem",
+            border: `1px solid ${ableToTrade ? "rgba(74,124,89,0.4)" : "rgba(192,57,43,0.4)"}`, borderRadius: "1px",
+            background: ableToTrade ? "radial-gradient(ellipse at 50% 0%, rgba(74,124,89,0.1) 0%, transparent 65%)" : "radial-gradient(ellipse at 50% 0%, rgba(192,57,43,0.1) 0%, transparent 65%)",
+          }}>
+            <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.3em", textTransform: "uppercase", color: "rgba(201,168,76,0.7)", marginBottom: "10px" }}>Status</div>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "clamp(28px, 5vw, 40px)", fontWeight: 900, color: ableToTrade ? "#4A7C59" : "#C0392B", lineHeight: 1 }}>
+              {ableToTrade ? "ABLE TO TRADE" : "NOT ABLE TO TRADE"}
+            </div>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 700, color: ableToTrade ? "#4A7C59" : "#C0392B", marginTop: "8px" }}>
+              {readinessPct}% collected
+            </div>
+          </div>
+
+          {/* Balance + In/Out */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "28px", maxWidth: "560px", margin: "0 auto 1.25rem" }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.6)" }}>Actual Balance · Trading</div>
+              <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 700, color: CREAM }}>{Math.round(totalBalance).toLocaleString()} MAD</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.6)" }}>Money In · Trading</div>
+              <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 700, color: "#4A7C59" }}>+{Math.round(moneyInAll).toLocaleString()} MAD</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.6)" }}>Money Out · Trading</div>
+              <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 700, color: "#C0392B" }}>−{Math.round(moneyOutAll).toLocaleString()} MAD</div>
+            </div>
+          </div>
+
+          {/* Profit targets */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "28px", maxWidth: "560px", margin: "0 auto 1.75rem" }}>
+            {[
+              { label: "Daily Profit", stats: dayStats, target: dailyTarget },
+              { label: "Monthly Profit", stats: monthStats, target: planSummary?.target },
+              { label: "Yearly Profit", stats: yearStats, target: planSummary?.yearSurplusTarget },
+            ].map(({ label, stats, target }) => {
+              const hasTarget = target != null && target > 0;
+              const pct = hasTarget ? Math.round((stats.net / target) * 100) : null;
+              const color = stats.net >= 0 ? "#4A7C59" : "#C0392B";
+              return (
+                <div key={label} style={{ textAlign: "center" }}>
+                  <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.6)" }}>{label}</div>
+                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 700, color }}>
+                    {Math.round(stats.net).toLocaleString()}{hasTarget ? ` / ${Math.round(target).toLocaleString()}` : ""} <span style={{ fontSize: "10px" }}>MAD</span>
+                  </div>
+                  {hasTarget && (
+                    <div style={{ marginTop: "3px", display: "flex", flexDirection: "column", alignItems: "center" }}>
+                      <div style={{ height: "3px", width: "90px", background: "rgba(201,168,76,0.1)", borderRadius: "2px", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${Math.min(100, Math.max(0, pct))}%`, background: color, transition: "width 0.7s ease" }} />
+                      </div>
+                      <span style={{ fontFamily: "'Cormorant', serif", fontSize: "10px", color, marginTop: "1px" }}>{pct}%</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Loss limit % settings */}
+          <div style={{ border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "1.25rem 1.5rem", marginBottom: "1.75rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+              <span style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)" }}>Loss Limits · % of Total Balance</span>
+              <button onClick={() => setEditingLossPcts((v) => !v)} style={{ background: "none", border: "1px solid rgba(201,168,76,0.3)", borderRadius: "1px", color: GOLD, fontSize: "10px", fontFamily: "'Cormorant', serif", padding: "4px 10px", cursor: "pointer" }}>
+                {editingLossPcts ? "Done" : "✎ Change"}
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
+              {[["daily", "Daily", dailyLossLimit], ["weekly", "Weekly", weeklyLossLimit], ["monthly", "Monthly", monthlyLossLimit]].map(([key, label, limitMAD]) => (
+                <div key={key} style={{ textAlign: "center" }}>
+                  <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)" }}>{label}</div>
+                  {editingLossPcts ? (
+                    <input
+                      type="number" step="0.5" defaultValue={lossPcts[key]}
+                      onBlur={(e) => saveLossPcts({ ...lossPcts, [key]: Math.max(0, parseFloat(e.target.value) || 0) })}
+                      style={{ width: "70px", textAlign: "center", background: "rgba(250,248,243,0.03)", border: "1px solid rgba(201,168,76,0.3)", borderRadius: "1px", color: CREAM, fontFamily: "'Playfair Display', serif", fontSize: "14px", padding: "4px" }}
+                    />
+                  ) : (
+                    <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 700, color: CREAM }}>{lossPcts[key]}%</div>
+                  )}
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10px", color: "rgba(201,168,76,0.45)", marginTop: "2px" }}>≈ {limitMAD.toLocaleString()} MAD</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Checklist */}
+          <div style={{ border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "1.25rem 1.5rem" }}>
+            <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "14px" }}>Checklist</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {checklist.map((c, i) => (
+                <div key={i} onClick={c.manualKey ? () => toggleManualCheck(c.manualKey) : undefined} style={{
+                  padding: "4px 10px", textAlign: "center",
+                  border: `1px solid ${!c.available ? "rgba(201,168,76,0.12)" : c.checked ? "rgba(74,124,89,0.3)" : "rgba(192,57,43,0.25)"}`,
+                  background: !c.available ? "rgba(201,168,76,0.02)" : c.checked ? "rgba(74,124,89,0.05)" : "rgba(192,57,43,0.04)",
+                  borderRadius: "1px", opacity: c.available ? 1 : 0.5,
+                  cursor: c.manualKey ? "pointer" : "default",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px" }}>
+                    <span style={{ fontSize: "12px", flexShrink: 0, color: !c.available ? "rgba(201,168,76,0.4)" : c.checked ? "#4A7C59" : "#C0392B" }}>
+                      {!c.available ? "—" : c.checked ? "✓" : "✕"}
+                    </span>
+                    <span style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontWeight: 600, fontSize: "12.5px", background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{c.label}</span>
+                    {!c.available && <span style={{ fontFamily: "'Cormorant', serif", fontSize: "10px", color: "rgba(201,168,76,0.4)" }}>data unavailable</span>}
+                  </div>
+                  {c.available && c.target !== undefined && (
+                    <div style={{ marginTop: "1px", display: "flex", flexDirection: "column", alignItems: "center" }}>
+                      <div style={{ height: "3px", width: "180px", background: "rgba(201,168,76,0.1)", borderRadius: "2px", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${Math.min(100, Math.max(0, c.pct))}%`, background: c.checked ? "#4A7C59" : "#C0392B", transition: "width 0.7s ease" }} />
+                      </div>
+                      <span style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", color: c.checked ? "#4A7C59" : "#C0392B", whiteSpace: "nowrap", marginTop: "1px" }}>
+                        {c.target !== null
+                          ? <>{Math.round(c.value).toLocaleString()}/{Math.round(c.target).toLocaleString()} MAD · {c.pct}%</>
+                          : <>{c.value >= 0 ? "+" : ""}{Math.round(c.value).toLocaleString()} MAD</>
+                        }
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+      </>
+    </div>
+  );
+}
 
 const GOLD = "#C9A84C";
 const GOLD_LIGHT = "#F5D98B";
@@ -101,7 +368,7 @@ function GlobalStyle() {
 
   return (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Cormorant:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Cormorant:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Cinzel:wght@400;500;600;700;900&display=swap');
       * { box-sizing: border-box; margin: 0; padding: 0; }
       html, body, #root { min-height: 100%; background: ${INK}; }
       ::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -335,9 +602,31 @@ export default function App() {
     if (cloudReady) cloudSave(LS_KEY, fin);
   }, [fin, cloudReady]);
 
+  /* ─── Capital — set in the main app (The Process → Special Ashraf
+     Finances), read-only here. Added on top of the running transaction
+     total but NEVER counted as money in or out: every in/out/net figure
+     below still comes purely from txs. If every transaction is deleted,
+     the balance floor is this capital, not 0. ─── */
+  const CAPITAL_KEY = "sa_capital";
+  const [capital, setCapital] = useState(() => {
+    try { const r = localStorage.getItem(CAPITAL_KEY); return r ? parseFloat(r) || 0 : 0; } catch { return 0; }
+  });
+  useEffect(() => {
+    const pull = () => cloudLoad(CAPITAL_KEY).then((remote) => {
+      if (typeof remote === "number") {
+        setCapital(remote);
+        try { localStorage.setItem(CAPITAL_KEY, String(remote)); } catch { }
+      }
+    });
+    pull();
+    const iv = setInterval(pull, 60000);
+    return () => clearInterval(iv);
+  }, []);
+
   /* ─── Derived ─── */
   const txs = fin.txs;
-  const balance = useMemo(() => txs.reduce((a, t) => a + (t.type === "in" ? t.amount : -t.amount), 0), [txs]);
+  const txsBalance = useMemo(() => txs.reduce((a, t) => a + (t.type === "in" ? t.amount : -t.amount), 0), [txs]);
+  const balance = capital + txsBalance;
   const invested = balance > 0 ? balance * INVEST_PCT : 0;
   const toSpend = balance > 0 ? balance * (1 - INVEST_PCT) : Math.max(balance, 0);
 
@@ -637,21 +926,43 @@ export default function App() {
       <div className="sa-container" style={{ position: "relative", zIndex: 1, maxWidth: "880px", margin: "0 auto", padding: "0 22px 80px" }}>
 
         {/* ─── Header ─── */}
-        <header className="sa-header" style={{ textAlign: "center", padding: "46px 0 30px" }}>
-          <div className="sa-eyebrow" style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.5em", textTransform: "uppercase", color: "rgba(201,168,76,0.7)", marginBottom: "10px" }}>Special Ashraf</div>
-          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: "clamp(30px, 5vw, 42px)", fontWeight: 600, letterSpacing: "0.06em", color: CREAM }}>
-            F I N A N C E S
+        <header className="sa-header" style={{ textAlign: "center", padding: "50px 0 34px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "14px", marginBottom: "20px" }}>
+            <div style={{ width: "44px", height: "1px", background: "linear-gradient(90deg, transparent, rgba(201,168,76,0.5))" }} />
+            <span style={{ width: "5px", height: "5px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
+            <div style={{ width: "20px", height: "1px", background: "rgba(201,168,76,0.3)" }} />
+            <span style={{ width: "5px", height: "5px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
+            <div style={{ width: "44px", height: "1px", background: "linear-gradient(90deg, rgba(201,168,76,0.5), transparent)" }} />
+          </div>
+
+          <h1 style={{
+            fontFamily: "'Cinzel', serif", fontSize: "clamp(24px, 4.4vw, 38px)", fontWeight: 700,
+            letterSpacing: "0.1em", lineHeight: 1.4, textTransform: "uppercase",
+            background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+            filter: "drop-shadow(0 1px 12px rgba(201,168,76,0.15))",
+          }}>
+            Special Ashraf Finances
+            <span style={{
+              display: "block", fontFamily: "'Cinzel', serif", fontWeight: 500,
+              fontSize: "12px", letterSpacing: "0.55em", marginTop: "2px",
+            }}>
+              The Money Game
+            </span>
           </h1>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "12px", marginTop: "14px" }}>
-            <div style={{ width: "60px", height: "1px", background: "linear-gradient(90deg, transparent, rgba(201,168,76,0.6))" }} />
-            <span style={{ width: "6px", height: "6px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
-            <div style={{ width: "60px", height: "1px", background: "linear-gradient(90deg, rgba(201,168,76,0.6), transparent)" }} />
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "14px", marginTop: "22px" }}>
+            <div style={{ width: "44px", height: "1px", background: "linear-gradient(90deg, transparent, rgba(201,168,76,0.5))" }} />
+            <span style={{ width: "5px", height: "5px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
+            <div style={{ width: "20px", height: "1px", background: "rgba(201,168,76,0.3)" }} />
+            <span style={{ width: "5px", height: "5px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
+            <div style={{ width: "44px", height: "1px", background: "linear-gradient(90deg, rgba(201,168,76,0.5), transparent)" }} />
           </div>
         </header>
 
         {/* ─── Nav ─── */}
         <nav className="sa-nav" style={{ display: "flex", justifyContent: "center", gap: "6px", marginBottom: "38px", flexWrap: "wrap" }}>
-          {[["dashboard", "Dashboard"], ["tracking", "Tracking"], ["plan", "The Plan"]].map(([id, label]) => {
+          {[["dashboard", "Dashboard"], ["tracking", "Tracking"], ["plan", "The Plan"], ["trading", "Trading"]].map(([id, label]) => {
             const active = tab === id;
             return (
               <button key={id} className="sa-nav-btn" onClick={() => setTab(id)} style={{
@@ -682,6 +993,11 @@ export default function App() {
                 {fmt(balance)}
               </div>
               <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "15px", letterSpacing: "0.2em", color: "rgba(201,168,76,0.7)", marginTop: "10px" }}>{CURRENCY}</div>
+              {capital !== 0 && (
+                <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "10.5px", color: "rgba(201,168,76,0.45)", marginTop: "2px" }}>
+                  includes {fmt(capital)} capital
+                </div>
+              )}
 
               {/* Invested / To Spend */}
               <div style={{ display: "flex", justifyContent: "center", gap: "28px", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid rgba(201,168,76,0.15)" }}>
@@ -1294,6 +1610,8 @@ export default function App() {
             })}
           </div>
         )}
+
+        {tab === "trading" && <TradingTab fin={fin} setFin={setFin} capital={capital} planSummary={planSummary} dailyTarget={dailyTarget} yearInAmt={yearInAmt} />}
       </div>
     </div>
   );
