@@ -383,11 +383,11 @@ function GlobalStyle() {
 
       /* ── Mobile ── */
       @media (max-width: 600px) {
-        .sa-container { padding: 0 14px 60px !important; }
-        .sa-header { padding: 28px 0 20px !important; }
+        .sa-container { padding: 0 calc(14px + env(safe-area-inset-right)) calc(60px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left)) !important; }
+        .sa-header { padding: calc(28px + env(safe-area-inset-top)) 0 20px !important; }
         .sa-eyebrow { font-size: 9px !important; letter-spacing: 0.32em !important; }
-        .sa-nav { gap: 4px !important; margin-bottom: 24px !important; }
-        .sa-nav-btn { padding: 9px 12px !important; font-size: 11px !important; letter-spacing: 0.1em !important; }
+        .sa-nav { gap: 4px !important; margin-bottom: 24px !important; flex-wrap: nowrap !important; width: 100% !important; }
+        .sa-nav-btn { flex: 1 1 0 !important; padding: 9px 4px !important; font-size: 9.5px !important; letter-spacing: 0.02em !important; white-space: nowrap !important; }
         .sa-balance-section { padding: 26px 16px 22px !important; margin-bottom: 16px !important; }
         .sa-split-grid { gap: 10px !important; margin-bottom: 16px !important; }
         .sa-split-card { padding: 18px 18px 16px !important; }
@@ -923,10 +923,10 @@ export default function App() {
       <GlobalStyle />
       <LuxuryBg />
 
-      <div className="sa-container" style={{ position: "relative", zIndex: 1, maxWidth: "880px", margin: "0 auto", padding: "0 22px 80px" }}>
+      <div className="sa-container" style={{ position: "relative", zIndex: 1, maxWidth: "880px", margin: "0 auto", padding: "0 calc(22px + env(safe-area-inset-right)) calc(80px + env(safe-area-inset-bottom)) calc(22px + env(safe-area-inset-left))" }}>
 
         {/* ─── Header ─── */}
-        <header className="sa-header" style={{ textAlign: "center", padding: "50px 0 34px" }}>
+        <header className="sa-header" style={{ textAlign: "center", padding: "calc(50px + env(safe-area-inset-top)) 0 34px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "14px", marginBottom: "20px" }}>
             <div style={{ width: "44px", height: "1px", background: "linear-gradient(90deg, transparent, rgba(201,168,76,0.5))" }} />
             <span style={{ width: "5px", height: "5px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
