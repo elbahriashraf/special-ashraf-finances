@@ -409,7 +409,15 @@ function GlobalStyle() {
           border-top: 1px solid rgba(201,168,76,0.25) !important;
           padding: 6px calc(4px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left)) !important;
         }
-        .sa-nav-btn { flex: 1 1 0 !important; padding: 9px 4px !important; font-size: 9.5px !important; letter-spacing: 0.02em !important; white-space: nowrap !important; }
+        .sa-nav-btn { flex: 1 1 0 !important; padding: 6px 4px !important; font-size: 9.5px !important; letter-spacing: 0.02em !important; white-space: nowrap !important; border: none !important; border-bottom: none !important; -webkit-appearance: none !important; appearance: none !important; }
+        .sa-topbar {
+          display: block !important;
+          position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important;
+          height: env(safe-area-inset-top) !important;
+          background: rgba(5,3,0,0.96) !important;
+          backdrop-filter: blur(12px) !important; -webkit-backdrop-filter: blur(12px) !important;
+          z-index: 50 !important;
+        }
         .sa-balance-section { padding: 26px 16px 22px !important; margin-bottom: 16px !important; }
         .sa-split-grid { gap: 10px !important; margin-bottom: 16px !important; }
         .sa-split-card { padding: 18px 18px 16px !important; }
@@ -713,7 +721,7 @@ export default function App() {
   const dailyPct = dailyTarget && dailyTarget > 0
     ? Math.round((doneTodayMAD / dailyTarget) * 100)
     : (doneTodayMAD > 0 ? 100 : 0);
-  const dailyPctColor = dailyPct >= 100 ? GOLD_LIGHT : dailyPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+  const dailyPctColor = dailyPct <= 100 ? GOLD_LIGHT : "#C0392B";
 
   // ── Tomorrow's target — same formula, but with today's earnings folded
   // into "already made this month" once today is done, and one fewer
@@ -963,6 +971,7 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: INK, color: CREAM, position: "relative" }}>
       <GlobalStyle />
       <LuxuryBg />
+      <div className="sa-topbar" style={{ display: "none" }} />
 
       <div className="sa-container" style={{ position: "relative", zIndex: 1, maxWidth: "880px", margin: "0 auto", padding: "0 calc(22px + env(safe-area-inset-right)) calc(80px + env(safe-area-inset-bottom)) calc(22px + env(safe-area-inset-left))" }}>
 
@@ -1007,12 +1016,17 @@ export default function App() {
             const active = tab === id;
             return (
               <button key={id} className="sa-nav-btn" onClick={() => setTab(id)} style={{
-                padding: "11px 34px", cursor: "pointer", background: active ? "rgba(201,168,76,0.1)" : "transparent",
-                border: "none", borderBottom: `1px solid ${active ? GOLD : "rgba(201,168,76,0.15)"}`,
+                padding: "11px 34px", cursor: "pointer", background: "transparent",
+                border: "none",
                 fontFamily: "'Cormorant', serif", fontSize: "15px", fontWeight: 600,
                 letterSpacing: "0.24em", textTransform: "uppercase",
-                color: active ? GOLD_LIGHT : "rgba(201,168,76,0.55)",
-                transition: "all 0.3s ease", flex: "0 1 auto",
+                transition: "color 0.3s ease", flex: "0 1 auto",
+                ...(active
+                  ? {
+                      background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+                      WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                    }
+                  : { color: "rgba(201,168,76,0.55)" }),
               }}>{label}</button>
             );
           })}
@@ -1034,25 +1048,28 @@ export default function App() {
                 {fmt(balance)}
               </div>
               <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "15px", letterSpacing: "0.2em", color: "rgba(201,168,76,0.7)", marginTop: "10px" }}>{CURRENCY}</div>
-              {capital !== 0 && (
-                <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "10.5px", color: "rgba(201,168,76,0.45)", marginTop: "2px" }}>
-                  includes {fmt(capital)} capital
-                </div>
-              )}
 
               {/* Invested / To Spend */}
               <div style={{ display: "flex", justifyContent: "center", gap: "28px", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid rgba(201,168,76,0.15)" }}>
                 <div style={{ textAlign: "center" }}>
                   <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "6px" }}>Invested · 80%</div>
-                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "20px", fontWeight: 600, color: CREAM }}>
-                    {fmt(invested)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                  <div style={{
+                    fontFamily: "'Playfair Display', serif", fontSize: "20px", fontWeight: 600,
+                    background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+                    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                  }}>
+                    {fmt(invested)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                   </div>
                 </div>
                 <div style={{ width: "1px", background: "rgba(201,168,76,0.2)" }} />
                 <div style={{ textAlign: "center" }}>
                   <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "6px" }}>To Spend · 20%</div>
-                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "20px", fontWeight: 600, color: CREAM }}>
-                    {fmt(toSpend)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                  <div style={{
+                    fontFamily: "'Playfair Display', serif", fontSize: "20px", fontWeight: 600,
+                    background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+                    WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                  }}>
+                    {fmt(toSpend)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                   </div>
                 </div>
               </div>
@@ -1077,14 +1094,21 @@ export default function App() {
                       )}
                     </span>
                   </div>
-                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600, color: CREAM }}>
-                    {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                  <div style={{
+                    fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                    background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                  }}>
+                    {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                   </div>
                   <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
                     <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                      <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: "linear-gradient(90deg, #7A5C0A 0%, #C9A84C 50%, #F5D98B 100%)", transition: "width 0.7s ease" }} />
                     </div>
-                    <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, color: dailyPctColor, marginTop: "8px" }}>
+                    <div style={{
+                      fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
+                      background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+                      WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                    }}>
                       {dailyPct}%
                     </div>
                   </div>
@@ -1096,7 +1120,6 @@ export default function App() {
                 if (!dailyRow || !dailyRow.data) return null;
                 const { out, allowance, diff } = dailyRow.data;
                 const over = diff > 0;
-                const c = over ? "#C0392B" : "#4A7C59";
                 return (
                   <section className="sa-balance-section" style={{
                     flex: "1 1 260px", textAlign: "center", padding: "26px 20px",
@@ -1113,17 +1136,27 @@ export default function App() {
                         </span>
                       )}
                     </div>
-                    <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600, color: c }}>
-                      {fmt(Math.round(out))} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(Math.round(allowance))} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                    <div style={{
+                      fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                      ...(over
+                        ? { color: "#C0392B" }
+                        : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                    }}>
+                      {fmt(Math.round(out))} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(Math.round(allowance))} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                     </div>
                     <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
                       <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${allowance > 0 ? Math.min(100, Math.round((out / allowance) * 100)) : 0}%`, background: over ? "linear-gradient(90deg, #8B2E22, #C0392B)" : `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                        <div style={{ height: "100%", width: `${allowance > 0 ? Math.min(100, Math.round((out / allowance) * 100)) : 0}%`, background: over ? "linear-gradient(90deg, #8B2E22, #C0392B)" : "linear-gradient(90deg, #7A5C0A 0%, #C9A84C 50%, #F5D98B 100%)", transition: "width 0.7s ease" }} />
                       </div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, color: c, marginTop: "8px" }}>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
+                        ...(over
+                          ? { color: "#C0392B" }
+                          : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                      }}>
                         {dailyRow.showPct != null
                           ? `${dailyRow.showPct}%`
-                          : <>{over ? "−" : ""}{fmt(Math.abs(Math.round(diff)))} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span></>
+                          : <>{over ? "−" : ""}{fmt(Math.abs(Math.round(diff)))} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span></>
                         }
                       </div>
                     </div>
@@ -1148,7 +1181,6 @@ export default function App() {
                   if (!r.data) return null;
                   const { out, allowance, diff } = r.data;
                   const over = diff > 0;
-                  const c = over ? "#C0392B" : "#4A7C59";
                   return (
                     <div key={r.label} style={{ textAlign: "center" }}>
                       <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)", marginBottom: "6px", lineHeight: 1.3 }}>
@@ -1159,13 +1191,23 @@ export default function App() {
                           </span>
                         )}
                       </div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 600, color: c }}>
-                        {fmt(Math.round(out))} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(Math.round(allowance))} <span style={{ fontSize: "10px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 600,
+                        ...(over
+                          ? { color: "#C0392B" }
+                          : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                      }}>
+                        {fmt(Math.round(out))} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(Math.round(allowance))} <span style={{ fontSize: "10px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                       </div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "12px", fontWeight: 600, color: c, marginTop: "4px" }}>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "12px", fontWeight: 600, marginTop: "4px",
+                        ...(over
+                          ? { color: "#C0392B" }
+                          : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                      }}>
                         {r.showPct != null
                           ? `${r.showPct}%`
-                          : <>{over ? "−" : ""}{fmt(Math.abs(Math.round(diff)))} <span style={{ fontSize: "9px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span></>
+                          : <>{over ? "−" : ""}{fmt(Math.abs(Math.round(diff)))} <span style={{ fontSize: "9px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span></>
                         }
                       </div>
                     </div>
@@ -1195,16 +1237,6 @@ export default function App() {
         {/* ═══════════ THE PLAN ═══════════ */}
         {tab === "plan" && (
           <div style={{ animation: "saFadeUp 0.45s ease" }}>
-            <div className="sa-plan-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "20px", flexWrap: "wrap", gap: "10px" }}>
-              <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "13px", color: "rgba(201,168,76,0.6)" }}>
-                {planSummary ? planSummary.monthLabel : "—"} · from The Process
-              </div>
-              <button onClick={refreshFromMainApp} disabled={refreshingPlan} style={{
-                background: "none", border: "1px solid rgba(201,168,76,0.3)", borderRadius: "1px",
-                cursor: refreshingPlan ? "default" : "pointer", color: GOLD, fontSize: "11px", fontFamily: "'Cormorant', serif",
-                letterSpacing: "0.14em", padding: "6px 14px", opacity: refreshingPlan ? 0.5 : 1,
-              }}>{refreshingPlan ? "Refreshing…" : "↻ Refresh from Main App"}</button>
-            </div>
 
             {!planSummary ? (
               <div style={{ textAlign: "center", padding: "60px 20px", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "16px", color: "rgba(250,248,243,0.3)" }}>
@@ -1218,12 +1250,22 @@ export default function App() {
                 <>
                   <div className="sa-plan-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "22px" }}>
                     <div className="sa-plan-card" style={{
+                      position: "relative",
                       border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "22px 22px 18px",
                       background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
                     }}>
+                      <button onClick={refreshFromMainApp} disabled={refreshingPlan} aria-label="Refresh from Main App" style={{
+                        position: "absolute", top: "10px", right: "10px",
+                        background: "none", border: "none", padding: "4px",
+                        cursor: refreshingPlan ? "default" : "pointer", color: GOLD, fontSize: "16px", lineHeight: 1,
+                        opacity: refreshingPlan ? 0.5 : 1,
+                      }}>↻</button>
                       <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "10px" }}>This Month Target</div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "28px", fontWeight: 600, color: CREAM }}>
-                        {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "28px", fontWeight: 600,
+                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      }}>
+                        {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                       </div>
                     </div>
                     <div className="sa-plan-card" style={{
@@ -1231,8 +1273,11 @@ export default function App() {
                       background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
                     }}>
                       <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "10px" }}>This Month Needed</div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "28px", fontWeight: 600, color: CREAM }}>
-                        {fmt(planSummary.monthlyNeeded)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "28px", fontWeight: 600,
+                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      }}>
+                        {fmt(planSummary.monthlyNeeded)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                       </div>
                     </div>
                   </div>
@@ -1255,14 +1300,21 @@ export default function App() {
                           )}
                         </span>
                       </div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600, color: CREAM }}>
-                        {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      }}>
+                        {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                       </div>
                       <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
                         <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                          <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: "linear-gradient(90deg, #7A5C0A 0%, #C9A84C 50%, #F5D98B 100%)", transition: "width 0.7s ease" }} />
                         </div>
-                        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, color: dailyPctColor, marginTop: "8px" }}>
+                        <div style={{
+                      fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
+                      background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+                      WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                    }}>
                           {dailyPct}%
                         </div>
                       </div>
@@ -1284,14 +1336,20 @@ export default function App() {
                           {new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })} <span style={{ color: "rgba(201,168,76,0.4)" }}>(-{workingDaysLeft})</span>
                         </span>
                       </div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600, color: CREAM }}>
-                        {fmt(pMonth.net)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      }}>
+                        {fmt(pMonth.net)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                       </div>
                       <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
                         <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
                           <div style={{ height: "100%", width: `${Math.min(100, monthlyPct)}%`, background: `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
                         </div>
-                        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, color: monthlyPctColor, marginTop: "8px" }}>
+                        <div style={{
+                          fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
+                          background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                        }}>
                           {monthlyPct}%
                         </div>
                       </div>
@@ -1318,20 +1376,32 @@ export default function App() {
                           <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)", marginBottom: "6px" }}>
                             Target to Earn
                           </div>
-                          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: CREAM }}>
-                            {fmt(yearInAmt)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(planSummary.yearSurplusTarget)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                          <div style={{
+                            fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600,
+                            background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                          }}>
+                            {fmt(yearInAmt)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(planSummary.yearSurplusTarget)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                           </div>
-                          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "13px", fontWeight: 600, color: yearSurplusColor, marginTop: "6px" }}>{yearSurplusPct}%</div>
+                          <div style={{
+                            fontFamily: "'Playfair Display', serif", fontSize: "13px", fontWeight: 600, marginTop: "6px",
+                            background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                          }}>{yearSurplusPct}%</div>
                         </div>
                         <div className="sa-yearly-divider" style={{ width: "1px", background: "rgba(201,168,76,0.2)" }} />
                         <div style={{ textAlign: "center", flex: "1 1 160px" }}>
                           <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)", marginBottom: "6px" }}>
                             Target Balance
                           </div>
-                          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: CREAM }}>
-                            {fmt(balance)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>/</span> {fmt(planSummary.yearEndBalanceTarget)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)" }}>{CURRENCY}</span>
+                          <div style={{
+                            fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600,
+                            background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                          }}>
+                            {fmt(balance)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(planSummary.yearEndBalanceTarget)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                           </div>
-                          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "13px", fontWeight: 600, color: yearBalanceColor, marginTop: "6px" }}>{yearBalancePct}%</div>
+                          <div style={{
+                            fontFamily: "'Playfair Display', serif", fontSize: "13px", fontWeight: 600, marginTop: "6px",
+                            background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                          }}>{yearBalancePct}%</div>
                         </div>
                       </div>
                     </section>
