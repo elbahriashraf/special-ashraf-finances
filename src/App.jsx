@@ -374,7 +374,8 @@ function GlobalStyle() {
       ::-webkit-scrollbar { width: 4px; height: 4px; }
       ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb { background: rgba(201,168,76,0.3); border-radius: 1px; }
-      input, textarea, button { font-family: inherit; outline: none; }
+      input, textarea, button { font-family: inherit; outline: none; -webkit-tap-highlight-color: transparent; }
+      * { -webkit-tap-highlight-color: transparent; }
       input::placeholder, textarea::placeholder { color: rgba(250,248,243,0.25); font-style: italic; }
       body, .sa-container { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
       input, textarea { -webkit-user-select: text; user-select: text; }
