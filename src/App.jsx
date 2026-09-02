@@ -370,10 +370,9 @@ function GlobalStyle() {
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Cormorant:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Cinzel:wght@400;500;600;700;900&display=swap');
       * { box-sizing: border-box; margin: 0; padding: 0; }
-      html, body, #root { min-height: 100%; background: ${INK}; }
-      ::-webkit-scrollbar { width: 4px; height: 4px; }
-      ::-webkit-scrollbar-track { background: transparent; }
-      ::-webkit-scrollbar-thumb { background: rgba(201,168,76,0.3); border-radius: 1px; }
+      html, body, #root { min-height: 100%; background: ${INK}; scrollbar-width: none; -ms-overflow-style: none; }
+      * { scrollbar-width: none; -ms-overflow-style: none; }
+      ::-webkit-scrollbar { display: none; width: 0; height: 0; }
       input, textarea, button { font-family: inherit; outline: none; -webkit-tap-highlight-color: transparent; }
       * { -webkit-tap-highlight-color: transparent; }
       input::placeholder, textarea::placeholder { color: rgba(250,248,243,0.25); font-style: italic; }
