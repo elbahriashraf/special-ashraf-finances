@@ -277,6 +277,111 @@ const GOLD = "#C9A84C";
 const GOLD_LIGHT = "#F5D98B";
 const INK = "#050300";
 const CREAM = "#FAF8F3";
+
+/* ── Theme system (ported from Companion) — only the BACKGROUND changes;
+   gold/cream text stays constant. "Mood (Auto)" reads Companion's daily
+   mood-character pick from the shared cloud store and derives a matching
+   background from that character's aura color — same day-key logic as
+   Companion (both apps share the "2026-07-22" start date), so the two
+   apps land on the same mood for the same day. No "Sun"/light preset —
+   Finances has no light-mode text system to support it. */
+const MOOD_AURA_BY_ID = {
+  king: "#F5D98B", warrior: "#C0392B", monk: "#4A7C59", hustler: "#D98E34",
+  wildcard: "#B285D9", ghost: "#8FA3B8", charmer: "#E85D9C", storm: "#5B7FE8",
+};
+function themeDayKey() {
+  const start = new Date("2026-07-22"); start.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dayNum = Math.max(1, Math.floor((today - start) / 86400000) + 1);
+  return `d${String(dayNum).padStart(2, "0")}`;
+}
+function hexToHsl(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d !== 0) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4;
+    }
+    h /= 6;
+  }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+}
+function hslToRgb(h, s, l) {
+  h /= 360; s /= 100; l /= 100;
+  if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [
+    Math.round(hue2rgb(p, q, h + 1 / 3) * 255),
+    Math.round(hue2rgb(p, q, h) * 255),
+    Math.round(hue2rgb(p, q, h - 1 / 3) * 255),
+  ];
+}
+function deriveMoodBackground(auraHex) {
+  const { h, s } = hexToHsl(auraHex);
+  const sat = Math.max(s, 35);
+  const stops = [
+    { l: 9, pos: 0 }, { l: 17, pos: 35 }, { l: 8, pos: 65 }, { l: 4, pos: 100 },
+  ];
+  const rgbStops = stops.map(st => ({ ...st, rgb: hslToRgb(h, sat, st.l) }));
+  const toHex = (v) => v.toString(16).padStart(2, "0");
+  return `linear-gradient(135deg, ${rgbStops.map(st => `#${st.rgb.map(toHex).join("")} ${st.pos}%`).join(", ")})`;
+}
+const THEME_REDBROWN = "linear-gradient(135deg, #2C0A0A 0%, #1A0A08 30%, #2E1008 60%, #1C0606 100%)";
+const THEME_GTA5 = "linear-gradient(135deg, #4A2411 0%, #6B3410 30%, #2B1440 65%, #10081F 100%)";
+const THEME_GTA6 = "linear-gradient(135deg, #2B0B3D 0%, #5C1257 35%, #1B0A38 65%, #0D0420 100%)";
+const THEME_SANANDREAS = "linear-gradient(135deg, #1B2E0A 0%, #2E4D0F 30%, #4A2E0A 65%, #1A0F05 100%)";
+const THEME_DUBAI = "linear-gradient(135deg, #2A1F0A 0%, #4A3410 30%, #1F1508 65%, #0D0904 100%)";
+const THEME_MIAMI = "linear-gradient(135deg, #0A3D3D 0%, #0F5C5C 30%, #4D1F3D 65%, #1F0A1A 100%)";
+const THEME_WC2014 = "linear-gradient(135deg, #003D2E 0%, #00523D 30%, #002B4D 65%, #001220 100%)";
+const THEME_NOSTALGIA2014 = "linear-gradient(135deg, #3D2B1F 0%, #5C4530 30%, #2E2015 65%, #150F0A 100%)";
+const THEME_FOCUS = "linear-gradient(135deg, #1A1D1F 0%, #14171A 30%, #0F1113 65%, #0A0B0D 100%)";
+const THEME_ORIGINAL = INK;
+const THEME_PRESETS = [
+  { id: "mood", label: "Mood (Auto)" },
+  { id: "original", label: "Original" },
+  { id: "redbrown", label: "Redbrown" },
+  { id: "gta5", label: "GTA V" },
+  { id: "gta6", label: "GTA VI" },
+  { id: "sanandreas", label: "San Andreas" },
+  { id: "dubai", label: "Dubai" },
+  { id: "miami", label: "Miami" },
+  { id: "wc2014", label: "2014 World Cup" },
+  { id: "nostalgia2014", label: "2014 Nostalgia" },
+  { id: "focus", label: "Focus Mode" },
+];
+function resolveBackgroundTheme(themeChoice, todayMoodAura) {
+  if (themeChoice === "original") return THEME_ORIGINAL;
+  if (themeChoice === "gta5") return THEME_GTA5;
+  if (themeChoice === "gta6") return THEME_GTA6;
+  if (themeChoice === "sanandreas") return THEME_SANANDREAS;
+  if (themeChoice === "dubai") return THEME_DUBAI;
+  if (themeChoice === "miami") return THEME_MIAMI;
+  if (themeChoice === "wc2014") return THEME_WC2014;
+  if (themeChoice === "nostalgia2014") return THEME_NOSTALGIA2014;
+  if (themeChoice === "focus") return THEME_FOCUS;
+  if (themeChoice === "mood") {
+    if (todayMoodAura) return deriveMoodBackground(todayMoodAura);
+    return THEME_REDBROWN;
+  }
+  return THEME_REDBROWN;
+}
 const LS_KEY = "sa_finances_v1";
 const CURRENCY = "MAD";
 const INVEST_PCT = 0.8;
@@ -355,7 +460,7 @@ const fmt = (n) => {
 };
 
 /* ─── Fonts + global ─── */
-function GlobalStyle() {
+function GlobalStyle({ bg }) {
   useEffect(() => {
     let tag = document.querySelector('meta[name="viewport"]');
     if (!tag) {
@@ -370,7 +475,7 @@ function GlobalStyle() {
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Cormorant:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Cinzel:wght@400;500;600;700;900&display=swap');
       * { box-sizing: border-box; margin: 0; padding: 0; }
-      html, body, #root { min-height: 100%; background: ${INK}; scrollbar-width: none; -ms-overflow-style: none; }
+      html, body, #root { min-height: 100%; background: ${bg}; background-attachment: fixed; scrollbar-width: none; -ms-overflow-style: none; }
       * { scrollbar-width: none; -ms-overflow-style: none; }
       ::-webkit-scrollbar { display: none; width: 0; height: 0; }
       input, textarea, button { font-family: inherit; outline: none; -webkit-tap-highlight-color: transparent; }
@@ -404,9 +509,9 @@ function GlobalStyle() {
           gap: 4px !important; flex-wrap: nowrap !important; width: 100% !important;
           position: fixed !important; bottom: 0 !important; left: 0 !important; right: 0 !important;
           margin-bottom: 0 !important; z-index: 50 !important;
-          background: rgba(5,3,0,0.96) !important;
+          background: radial-gradient(ellipse at 20% 0%, rgba(201,168,76,0.06) 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, rgba(201,168,76,0.05) 0%, transparent 50%), ${bg} !important;
+          background-attachment: fixed !important;
           backdrop-filter: blur(12px) !important; -webkit-backdrop-filter: blur(12px) !important;
-          border-top: 1px solid rgba(201,168,76,0.25) !important;
           padding: 6px calc(4px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left)) !important;
         }
         .sa-nav-btn { flex: 1 1 0 !important; padding: 6px 4px !important; font-size: 9.5px !important; letter-spacing: 0.02em !important; white-space: nowrap !important; border: none !important; border-bottom: none !important; -webkit-appearance: none !important; appearance: none !important; }
@@ -451,10 +556,10 @@ function GlobalStyle() {
 }
 
 /* ─── Ornamental background ─── */
-function LuxuryBg() {
+function LuxuryBg({ bg }) {
   return (
     <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
-      <div style={{ position: "absolute", inset: 0, background: `radial-gradient(ellipse at 20% 0%, rgba(201,168,76,0.06) 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, rgba(201,168,76,0.05) 0%, transparent 50%), ${INK}` }} />
+      <div style={{ position: "absolute", inset: 0, background: `radial-gradient(ellipse at 20% 0%, rgba(201,168,76,0.06) 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, rgba(201,168,76,0.05) 0%, transparent 50%), ${bg}` }} />
       {/* Frame lines */}
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "2px", background: `linear-gradient(90deg, transparent, ${GOLD} 30%, ${GOLD_LIGHT} 50%, ${GOLD} 70%, transparent)` }} />
       <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "1px", background: "linear-gradient(90deg, transparent, rgba(201,168,76,0.4) 50%, transparent)" }} />
@@ -610,12 +715,79 @@ function FlowChart({ txs }) {
   );
 }
 
+function ThemePickerPanel({ current, onSelect, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200,
+        background: "rgba(0,0,0,0.6)", backdropFilter: "blur(6px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: "24px",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: INK, border: "1px solid rgba(201,168,76,0.35)", borderRadius: "1px",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+          padding: "22px 18px", width: "100%", maxWidth: "230px", textAlign: "center",
+        }}
+      >
+        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "12px", letterSpacing: "0.2em", fontWeight: 700, color: GOLD, textTransform: "uppercase", marginBottom: "14px" }}>Theme</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "7px", maxHeight: "260px", overflowY: "auto" }}>
+          {THEME_PRESETS.map((p) => (
+            <div
+              key={p.id}
+              onClick={() => { onSelect(p.id); onClose(); }}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "9px 12px", borderRadius: "1px", cursor: "pointer", flexShrink: 0,
+                background: current === p.id ? "rgba(201,168,76,0.18)" : "rgba(201,168,76,0.05)",
+                border: current === p.id ? "1px solid rgba(201,168,76,0.55)" : "1px solid rgba(201,168,76,0.18)",
+              }}
+            >
+              <span style={{ fontFamily: "'Playfair Display', serif", fontSize: "12px", fontWeight: 700, color: current === p.id ? GOLD_LIGHT : "rgba(201,168,76,0.75)" }}>{p.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════════ APP ═══════════════════════ */
 export default function App() {
   const [tab, setTab] = useState("dashboard");
   const [fin, setFin] = useState(() => store.load() || { txs: [] });
   const loaded = useRef(false);
   const [cloudReady, setCloudReady] = useState(false);
+
+  const [themeChoice, setThemeChoiceRaw] = useState(() => {
+    try { return localStorage.getItem("sa_theme_choice") || "mood"; } catch { return "mood"; }
+  });
+  const [themePanelOpen, setThemePanelOpen] = useState(false);
+  const [todayMoodAura, setTodayMoodAura] = useState(null);
+  const setThemeChoice = (choice) => {
+    setThemeChoiceRaw(choice);
+    try { localStorage.setItem("sa_theme_choice", choice); } catch { }
+    cloudSave("sa_theme_choice", choice);
+  };
+  useEffect(() => {
+    cloudLoad("sa_theme_choice").then((saved) => {
+      if (saved) {
+        setThemeChoiceRaw(saved);
+        try { localStorage.setItem("sa_theme_choice", saved); } catch { }
+      }
+    });
+    // Reads Companion's daily mood-character pick from the shared cloud
+    // store so "Mood (Auto)" matches it here too.
+    cloudLoad("sa_mood_character").then((chars) => {
+      const charId = chars && chars[themeDayKey()];
+      if (charId && MOOD_AURA_BY_ID[charId]) setTodayMoodAura(MOOD_AURA_BY_ID[charId]);
+    });
+  }, []);
+  const resolvedBg = resolveBackgroundTheme(themeChoice, todayMoodAura);
 
   // ── The Plan — mirrors this month's target/Earned figures from the main
   // app's Special Ashraf Finances Money page (The Process). We don't have
@@ -992,65 +1164,41 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: INK, color: CREAM, position: "relative" }}>
-      <GlobalStyle />
-      <LuxuryBg />
+    <div style={{ minHeight: "100vh", background: resolvedBg, backgroundAttachment: "fixed", color: CREAM, position: "relative" }}>
+      <GlobalStyle bg={resolvedBg} />
+      <LuxuryBg bg={resolvedBg} />
       <div className="sa-topbar" style={{ display: "none" }} />
 
       <div className="sa-container" style={{ position: "relative", zIndex: 1, maxWidth: "880px", margin: "0 auto", padding: "0 calc(22px + env(safe-area-inset-right)) calc(80px + env(safe-area-inset-bottom)) calc(22px + env(safe-area-inset-left))" }}>
 
         {/* ─── Header ─── */}
-        {tab === "dashboard" ? (
-          <header className="sa-header" style={{ textAlign: "center", padding: "calc(50px + env(safe-area-inset-top)) 0 34px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "14px", marginBottom: "20px" }}>
-              <div style={{ width: "44px", height: "1px", background: "linear-gradient(90deg, transparent, rgba(201,168,76,0.5))" }} />
-              <span style={{ width: "5px", height: "5px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
-              <div style={{ width: "20px", height: "1px", background: "rgba(201,168,76,0.3)" }} />
-              <span style={{ width: "5px", height: "5px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
-              <div style={{ width: "44px", height: "1px", background: "linear-gradient(90deg, rgba(201,168,76,0.5), transparent)" }} />
-            </div>
-
-            <h1 style={{
-              fontFamily: "'Cinzel', serif", fontSize: "clamp(24px, 4.4vw, 38px)", fontWeight: 700,
-              letterSpacing: "0.1em", lineHeight: 1.4, textTransform: "uppercase",
-              background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
-              WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
-              filter: "drop-shadow(0 1px 12px rgba(201,168,76,0.15))",
-            }}>
-              Special Ashraf Finances
-              <span style={{
-                display: "block", fontFamily: "'Cinzel', serif", fontWeight: 500,
-                fontSize: "12px", letterSpacing: "0.55em", marginTop: "2px",
-              }}>
-                The Money Game
-              </span>
-            </h1>
-
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "14px", marginTop: "22px" }}>
-              <div style={{ width: "44px", height: "1px", background: "linear-gradient(90deg, transparent, rgba(201,168,76,0.5))" }} />
-              <span style={{ width: "5px", height: "5px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
-              <div style={{ width: "20px", height: "1px", background: "rgba(201,168,76,0.3)" }} />
-              <span style={{ width: "5px", height: "5px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
-              <div style={{ width: "44px", height: "1px", background: "linear-gradient(90deg, rgba(201,168,76,0.5), transparent)" }} />
-            </div>
-          </header>
-        ) : (
-          <header className="sa-header" style={{ textAlign: "center", padding: "calc(26px + env(safe-area-inset-top)) 0 18px" }}>
-            <h1 style={{
+        <header className="sa-header" style={{ textAlign: "center", padding: "calc(26px + env(safe-area-inset-top)) 0 18px" }}>
+          <h1
+            key={tab}
+            onClick={() => setThemePanelOpen(true)}
+            style={{
               fontFamily: "'Cinzel', serif", fontSize: "clamp(14px, 3.2vw, 17px)", fontWeight: 700,
               letterSpacing: "0.08em", lineHeight: 1.3, textTransform: "uppercase", whiteSpace: "nowrap",
               background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
               WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+              animation: "saFadeUp 0.4s ease", cursor: "pointer",
             }}>
-              Special Ashraf Finances
-              <span style={{
-                display: "block", fontFamily: "'Cinzel', serif", fontWeight: 500,
-                fontSize: "9px", letterSpacing: "0.45em", marginTop: "3px",
-              }}>
-                The Money Game
-              </span>
-            </h1>
-          </header>
+            Special Ashraf Finances
+            <span style={{
+              display: "block", fontFamily: "'Cinzel', serif", fontWeight: 500,
+              fontSize: "9px", letterSpacing: "0.45em", marginTop: "3px",
+            }}>
+              The Money Game
+            </span>
+          </h1>
+        </header>
+
+        {themePanelOpen && (
+          <ThemePickerPanel
+            current={themeChoice}
+            onSelect={setThemeChoice}
+            onClose={() => setThemePanelOpen(false)}
+          />
         )}
 
         {/* ─── Nav ─── */}
