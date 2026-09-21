@@ -1355,6 +1355,67 @@ export default function App() {
               })()}
             </div>
 
+            {/* Weekly Sadaqah — 10% of net Trading income (In − Out), Friday-only checkable */}
+            {(() => {
+              const sadaqahTxs = txs.filter((t) => t.type === "out" && t.incomeType === "Sadaqah");
+              const lastSadaqahDate = sadaqahTxs.length
+                ? sadaqahTxs.reduce((max, t) => (t.date > max ? t.date : max), sadaqahTxs[0].date)
+                : null;
+              const inWindow = txs.filter((t) => t.incomeType === "Trading" && (!lastSadaqahDate || t.date > lastSadaqahDate));
+              const tradingIn = inWindow.filter((t) => t.type === "in").reduce((s, t) => s + t.amount, 0);
+              const tradingOut = inWindow.filter((t) => t.type === "out").reduce((s, t) => s + t.amount, 0);
+              const sadaqahDue = Math.max(0, (tradingIn - tradingOut) * 0.10);
+              const today = todayKey();
+              const isFriday = new Date().getDay() === 5;
+              const paidToday = sadaqahTxs.some((t) => t.date === today);
+
+              const toggleSadaqah = () => {
+                if (!isFriday) return;
+                if (paidToday) {
+                  setFin((p) => ({ ...p, txs: p.txs.filter((t) => !(t.type === "out" && t.incomeType === "Sadaqah" && t.date === today)) }));
+                } else {
+                  if (sadaqahDue <= 0) return;
+                  const tx = {
+                    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+                    type: "out", amount: Math.round(sadaqahDue * 100) / 100,
+                    comment: "Weekly Sadaqah",
+                    incomeType: "Sadaqah",
+                    date: today,
+                    ts: Date.now(),
+                  };
+                  setFin((p) => ({ ...p, txs: [tx, ...p.txs] }));
+                }
+              };
+
+              return (
+                <section
+                  className="sa-balance-section"
+                  onClick={toggleSadaqah}
+                  style={{
+                    textAlign: "center", padding: "20px 20px", marginBottom: "22px",
+                    border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                    background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                    boxSizing: "border-box",
+                    cursor: isFriday ? "pointer" : "default",
+                    opacity: isFriday || paidToday ? 1 : 0.75,
+                  }}
+                  title={isFriday ? (paidToday ? "Undo this week's Sadaqah" : "Mark Sadaqah as paid") : "Only checkable on Fridays"}
+                >
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: paidToday ? "#3CB371" : "rgba(201,168,76,0.65)", marginBottom: "2px" }}>
+                    Weekly Sadaqah
+                  </div>
+                  <div style={{
+                    fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                    ...(paidToday
+                      ? { color: "#3CB371" }
+                      : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                  }}>
+                    {fmt(Math.round(sadaqahDue))} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: paidToday ? "rgba(60,179,113,0.7)" : "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                  </div>
+                </section>
+              );
+            })()}
+
             {/* Spending — over/under the 20% allowance */}
             <section className="sa-balance-section" style={{
               textAlign: "center", padding: "26px 20px", marginBottom: "22px",
