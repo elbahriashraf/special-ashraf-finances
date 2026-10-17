@@ -1,0 +1,17 @@
+{
+  "name": "Special Ashraf — Finances",
+  "short_name": "Special Ashraf",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#050300",
+  "theme_color": "#050300",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

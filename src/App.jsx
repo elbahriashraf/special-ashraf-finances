@@ -5,11 +5,383 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
    Dark luxury · Gold · Cormorant / Playfair Display
    Data: single state object `fin` → localStorage (Supabase-ready)
    ═══════════════════════════════════════════════════════════════ */
+// ═══════════════════════════════════════════════════════════════
+// TRADING TAB — paste this whole block at top level, above your
+// main App component. Requires GOLD, GOLD_LIGHT, INK, CREAM,
+// CURRENCY, cloudLoad, cloudSave, fmt(n) to already exist in scope
+// (same names your file already uses elsewhere).
+// ═══════════════════════════════════════════════════════════════
+
+const TRADING_LOSS_PCT_KEY = "sa_trading_loss_pcts"; // { daily, weekly, monthly }
+const TRADING_READINESS_KEY_READ = "sa_trading_readiness_today"; // published by the main app
+const MINDSET_RATINGS_KEY_READ = "sa_mindset_ratings"; // published by main/companion app
+const FINANCE_START_DATE = new Date("2026-07-22"); // must match the main app's START_DATE
+
+function TradingTab({ fin, setFin, capital, planSummary, dailyTarget, yearInAmt }) {
+  const [tSubTab, setTSubTab] = useState("dashboard"); // "dashboard" | "tracking"
+  const [amount, setAmount] = useState("");
+  const [comment, setComment] = useState("");
+  const [flow, setFlow] = useState("in");
+
+  const [lossPcts, setLossPcts] = useState(() => {
+    try { const r = localStorage.getItem(TRADING_LOSS_PCT_KEY); return r ? JSON.parse(r) : { daily: 2, weekly: 5, monthly: 10 }; }
+    catch { return { daily: 2, weekly: 5, monthly: 10 }; }
+  });
+  const [editingLossPcts, setEditingLossPcts] = useState(false);
+
+  const [readiness, setReadiness] = useState(null); // { completionRateUntilNow } — published by the main app
+  const [moodPct, setMoodPct] = useState(null); // null = data unavailable, excluded from checklist rather than guessed
+
+  // Salat / Duaa are manual checkboxes now, not derived — reset each day.
+  const TRADING_MANUAL_KEY = "sa_trading_manual_checks";
+  const [manualChecks, setManualChecks] = useState(() => {
+    try {
+      const r = JSON.parse(localStorage.getItem(TRADING_MANUAL_KEY) || "{}");
+      const todayKey = new Date().toISOString().slice(0, 10);
+      return r.date === todayKey ? r : { date: todayKey, salat: false, duaa: false };
+    } catch { return { date: new Date().toISOString().slice(0, 10), salat: false, duaa: false }; }
+  });
+  const toggleManualCheck = (key) => {
+    setManualChecks((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem(TRADING_MANUAL_KEY, JSON.stringify(next)); } catch { }
+      cloudSave(TRADING_MANUAL_KEY, next);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    cloudLoad(TRADING_LOSS_PCT_KEY).then((remote) => {
+      if (remote && typeof remote === "object") {
+        setLossPcts(remote);
+        try { localStorage.setItem(TRADING_LOSS_PCT_KEY, JSON.stringify(remote)); } catch { }
+      }
+    });
+    const pull = () => {
+      cloudLoad(TRADING_READINESS_KEY_READ).then((r) => { if (r) setReadiness(r); });
+      // Mood schema is a best-effort read — if the shape doesn't match what's
+      // expected, moodPct stays null and the checklist item is simply
+      // excluded from scoring rather than silently guessed as pass/fail.
+      cloudLoad("sa_live_mood").then((r) => {
+        // Only trust it if it was published recently (Mood tab needs to be
+        // open for it to update) — otherwise it's a stale reading, and
+        // showing "data unavailable" is more honest than a wrong old number.
+        if (r && typeof r.mood === "number" && r.updatedAt && Date.now() - r.updatedAt < 10 * 60 * 1000) {
+          setMoodPct(Math.round(r.mood));
+        }
+      });
+    };
+    pull();
+    const iv = setInterval(pull, 60000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const saveLossPcts = (next) => {
+    setLossPcts(next);
+    try { localStorage.setItem(TRADING_LOSS_PCT_KEY, JSON.stringify(next)); } catch { }
+    cloudSave(TRADING_LOSS_PCT_KEY, next);
+  };
+
+  const addTradingTx = () => {
+    const val = parseFloat(amount);
+    if (!val || val <= 0) return;
+    const tx = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      type: flow, amount: val,
+      comment: comment.trim(),
+      incomeType: "Trading",
+      date: new Date().toISOString().slice(0, 10),
+      ts: Date.now(),
+    };
+    setFin((p) => ({ ...p, txs: [tx, ...p.txs] }));
+    setAmount(""); setComment("");
+  };
+
+  // ── Trading-only figures ──
+  const txs = fin.txs || [];
+  const tradingTxs = txs.filter((t) => t.incomeType === "Trading");
+  const totalBalance = (capital || 0) + tradingTxs.reduce((s, t) => s + (t.type === "in" ? t.amount : -t.amount), 0);
+  const moneyInAll = tradingTxs.filter((t) => t.type === "in").reduce((s, t) => s + t.amount, 0);
+  const moneyOutAll = tradingTxs.filter((t) => t.type === "out").reduce((s, t) => s + t.amount, 0);
+
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const weekAgoKey = (() => { const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10); })();
+  const monthKey = todayKey.slice(0, 7);
+
+  const netFor = (pred) => {
+    const list = tradingTxs.filter(pred);
+    const inAmt = list.filter((t) => t.type === "in").reduce((s, t) => s + t.amount, 0);
+    const outAmt = list.filter((t) => t.type === "out").reduce((s, t) => s + t.amount, 0);
+    return { in: inAmt, out: outAmt, net: inAmt - outAmt };
+  };
+  const dayStats = netFor((t) => t.date === todayKey);
+  const weekStats = netFor((t) => t.date >= weekAgoKey);
+  const monthStats = netFor((t) => t.date && t.date.startsWith(monthKey));
+  const yearStats = planSummary?.yearRangeStartISO
+    ? netFor((t) => t.date >= planSummary.yearRangeStartISO && t.date < planSummary.yearRangeEndISO)
+    : { in: 0, out: 0, net: 0 };
+  const tradesToday = tradingTxs.filter((t) => t.date === todayKey).length;
+
+  const dailyLossLimit = Math.round(totalBalance * (lossPcts.daily / 100));
+  const weeklyLossLimit = Math.round(totalBalance * (lossPcts.weekly / 100));
+  const monthlyLossLimit = Math.round(totalBalance * (lossPcts.monthly / 100));
+
+  // ── Checklist — each item is a pass/fail, contributing an equal share of 100% ──
+  const checklist = [
+    { label: "Salat is done", checked: !!manualChecks.salat, available: true, manualKey: "salat" },
+    { label: "Duaa is done", checked: !!manualChecks.duaa, available: true, manualKey: "duaa" },
+    { label: moodPct != null ? `Mood is ${moodPct}%` : "Mood", checked: (moodPct ?? 0) >= 80, available: moodPct != null },
+    { label: readiness?.completionRateUntilNow != null ? `Completion rate today is ${readiness.completionRateUntilNow}%` : "Completion rate today", checked: (readiness?.completionRateUntilNow ?? 0) >= 80, available: readiness != null },
+    { label: "Number of trades today", checked: tradesToday < 3, available: true, value: tradesToday, target: 3, pct: Math.round((tradesToday / 3) * 100) },
+    { label: "Daily loss limit", checked: dayStats.out <= dailyLossLimit, available: true, value: dayStats.out, target: dailyLossLimit, pct: dailyLossLimit > 0 ? Math.round((dayStats.out / dailyLossLimit) * 100) : 0 },
+    { label: "Weekly loss limit", checked: weekStats.out <= weeklyLossLimit, available: true, value: weekStats.out, target: weeklyLossLimit, pct: weeklyLossLimit > 0 ? Math.round((weekStats.out / weeklyLossLimit) * 100) : 0 },
+    { label: "Monthly loss limit", checked: monthStats.out <= monthlyLossLimit, available: true, value: monthStats.out, target: monthlyLossLimit, pct: monthlyLossLimit > 0 ? Math.round((monthStats.out / monthlyLossLimit) * 100) : 0 },
+  ];
+  const scoredItems = checklist.filter((c) => c.available);
+  const checkedCount = scoredItems.filter((c) => c.checked).length;
+  const readinessPct = scoredItems.length ? Math.round((checkedCount / scoredItems.length) * 100) : 0;
+  const ableToTrade = readinessPct >= 80;
+
+  return (
+    <div style={{ animation: "saFadeUp 0.45s ease" }}>
+      <>
+        {/* Status */}
+        <div style={{
+          textAlign: "center", padding: "2rem 1rem", marginBottom: "1.75rem",
+          border: `1px solid ${ableToTrade ? "rgba(74,124,89,0.4)" : "rgba(192,57,43,0.4)"}`, borderRadius: "1px",
+          background: ableToTrade ? "radial-gradient(ellipse at 50% 0%, rgba(74,124,89,0.1) 0%, transparent 65%)" : "radial-gradient(ellipse at 50% 0%, rgba(192,57,43,0.1) 0%, transparent 65%)",
+        }}>
+          <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.3em", textTransform: "uppercase", color: "rgba(201,168,76,0.7)", marginBottom: "10px" }}>Status</div>
+          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "clamp(28px, 5vw, 40px)", fontWeight: 900, color: ableToTrade ? "#4A7C59" : "#C0392B", lineHeight: 1 }}>
+            {ableToTrade ? "ABLE TO TRADE" : "NOT ABLE TO TRADE"}
+          </div>
+          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 700, color: ableToTrade ? "#4A7C59" : "#C0392B", marginTop: "8px" }}>
+            {readinessPct}% collected
+          </div>
+        </div>
+
+        {/* Balance + In/Out */}
+        <div className="sa-balance-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "28px", maxWidth: "560px", margin: "0 auto 1.25rem" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.6)" }}>Actual Balance · Trading</div>
+            <div className="sa-balance-value" style={{ fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 700, color: CREAM, whiteSpace: "nowrap" }}>{Math.round(totalBalance).toLocaleString()} <span style={{ fontSize: "11px", fontWeight: 600 }}>MAD</span></div>
+          </div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.6)" }}>Money In · Trading</div>
+            <div className="sa-balance-value" style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 700, color: "#4A7C59", whiteSpace: "nowrap" }}>+{Math.round(moneyInAll).toLocaleString()} <span style={{ fontSize: "10px", fontWeight: 600 }}>MAD</span></div>
+          </div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.6)" }}>Money Out · Trading</div>
+            <div className="sa-balance-value" style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 700, color: "#C0392B", whiteSpace: "nowrap" }}>−{Math.round(moneyOutAll).toLocaleString()} <span style={{ fontSize: "10px", fontWeight: 600 }}>MAD</span></div>
+          </div>
+        </div>
+
+        {/* Profit targets */}
+        <div className="sa-profit-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "28px", maxWidth: "560px", margin: "0 auto 1.75rem" }}>
+          {[
+            { label: "Daily Profit", stats: dayStats, target: dailyTarget },
+            { label: "Monthly Profit", stats: monthStats, target: planSummary?.target },
+            { label: "Yearly Profit", stats: yearStats, target: planSummary?.yearSurplusTarget },
+          ].map(({ label, stats, target }) => {
+            const hasTarget = target != null && target > 0;
+            const pct = hasTarget ? Math.round((stats.net / target) * 100) : null;
+            const color = stats.net >= 0 ? "#4A7C59" : "#C0392B";
+            return (
+              <div key={label} style={{ textAlign: "center" }}>
+                <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.6)" }}>{label}</div>
+                <div className="sa-profit-value" style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 700, color, whiteSpace: "nowrap" }}>
+                  {Math.round(stats.net).toLocaleString()}{hasTarget ? ` / ${Math.round(target).toLocaleString()}` : ""} <span style={{ fontSize: "10px" }}>MAD</span>
+                </div>
+                {hasTarget && (
+                  <div style={{ marginTop: "3px", display: "flex", flexDirection: "column", alignItems: "center" }}>
+                    <div style={{ height: "3px", width: "90px", background: "rgba(201,168,76,0.1)", borderRadius: "2px", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, Math.max(0, pct))}%`, background: color, transition: "width 0.7s ease" }} />
+                    </div>
+                    <span style={{ fontFamily: "'Cormorant', serif", fontSize: "10px", color, marginTop: "1px" }}>{pct}%</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Loss limit % settings */}
+        <div style={{ border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "1.25rem 1.5rem", marginBottom: "1.75rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+            <span style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)" }}>Loss Limits · % of Total Balance</span>
+            <button onClick={() => setEditingLossPcts((v) => !v)} style={{ background: "none", border: "1px solid rgba(201,168,76,0.3)", borderRadius: "1px", color: GOLD, fontSize: "10px", fontFamily: "'Cormorant', serif", padding: "4px 10px", cursor: "pointer" }}>
+              {editingLossPcts ? "Done" : "✎ Change"}
+            </button>
+          </div>
+          <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
+            {[["daily", "Daily", dailyLossLimit], ["weekly", "Weekly", weeklyLossLimit], ["monthly", "Monthly", monthlyLossLimit]].map(([key, label, limitMAD]) => (
+              <div key={key} style={{ textAlign: "center" }}>
+                <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)" }}>{label}</div>
+                {editingLossPcts ? (
+                  <input
+                    type="number" step="0.5" defaultValue={lossPcts[key]}
+                    onBlur={(e) => saveLossPcts({ ...lossPcts, [key]: Math.max(0, parseFloat(e.target.value) || 0) })}
+                    style={{ width: "70px", textAlign: "center", background: "rgba(250,248,243,0.03)", border: "1px solid rgba(201,168,76,0.3)", borderRadius: "1px", color: CREAM, fontFamily: "'Playfair Display', serif", fontSize: "14px", padding: "4px" }}
+                  />
+                ) : (
+                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 700, color: CREAM }}>{lossPcts[key]}%</div>
+                )}
+                <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10px", color: "rgba(201,168,76,0.45)", marginTop: "2px" }}>≈ {limitMAD.toLocaleString()} MAD</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Checklist */}
+        <div style={{ border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "1.25rem 1.5rem" }}>
+          <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "14px" }}>Checklist</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {checklist.map((c, i) => (
+              <div key={i} onClick={c.manualKey ? () => toggleManualCheck(c.manualKey) : undefined} style={{
+                padding: "4px 10px", textAlign: "center",
+                border: `1px solid ${!c.available ? "rgba(201,168,76,0.12)" : c.checked ? "rgba(74,124,89,0.3)" : "rgba(192,57,43,0.25)"}`,
+                background: !c.available ? "rgba(201,168,76,0.02)" : c.checked ? "rgba(74,124,89,0.05)" : "rgba(192,57,43,0.04)",
+                borderRadius: "1px", opacity: c.available ? 1 : 0.5,
+                cursor: c.manualKey ? "pointer" : "default",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "12px", flexShrink: 0, color: !c.available ? "rgba(201,168,76,0.4)" : c.checked ? "#4A7C59" : "#C0392B" }}>
+                    {!c.available ? "—" : c.checked ? "✓" : "✕"}
+                  </span>
+                  <span style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontWeight: 600, fontSize: "12.5px", background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{c.label}</span>
+                  {!c.available && <span style={{ fontFamily: "'Cormorant', serif", fontSize: "10px", color: "rgba(201,168,76,0.4)" }}>data unavailable</span>}
+                </div>
+                {c.available && c.target !== undefined && (
+                  <div style={{ marginTop: "1px", display: "flex", flexDirection: "column", alignItems: "center" }}>
+                    <div style={{ height: "3px", width: "180px", background: "rgba(201,168,76,0.1)", borderRadius: "2px", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, Math.max(0, c.pct))}%`, background: c.checked ? "#4A7C59" : "#C0392B", transition: "width 0.7s ease" }} />
+                    </div>
+                    <span style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", color: c.checked ? "#4A7C59" : "#C0392B", whiteSpace: "nowrap", marginTop: "1px" }}>
+                      {c.target !== null
+                        ? <>{Math.round(c.value).toLocaleString()}/{Math.round(c.target).toLocaleString()} MAD · {c.pct}%</>
+                        : <>{c.value >= 0 ? "+" : ""}{Math.round(c.value).toLocaleString()} MAD</>
+                      }
+                    </span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </>
+    </div>
+  );
+}
 
 const GOLD = "#C9A84C";
 const GOLD_LIGHT = "#F5D98B";
 const INK = "#050300";
 const CREAM = "#FAF8F3";
+
+/* ── Theme system (ported from Companion) — only the BACKGROUND changes;
+   gold/cream text stays constant. "Mood (Auto)" reads Companion's daily
+   mood-character pick from the shared cloud store and derives a matching
+   background from that character's aura color — same day-key logic as
+   Companion (both apps share the "2026-07-22" start date), so the two
+   apps land on the same mood for the same day. No "Sun"/light preset —
+   Finances has no light-mode text system to support it. */
+const MOOD_AURA_BY_ID = {
+  king: "#F5D98B", warrior: "#C0392B", monk: "#4A7C59", hustler: "#D98E34",
+  wildcard: "#B285D9", ghost: "#8FA3B8", charmer: "#E85D9C", storm: "#5B7FE8",
+};
+function themeDayKey() {
+  const start = new Date("2026-07-22"); start.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dayNum = Math.max(1, Math.floor((today - start) / 86400000) + 1);
+  return `d${String(dayNum).padStart(2, "0")}`;
+}
+function hexToHsl(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d !== 0) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4;
+    }
+    h /= 6;
+  }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+}
+function hslToRgb(h, s, l) {
+  h /= 360; s /= 100; l /= 100;
+  if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [
+    Math.round(hue2rgb(p, q, h + 1 / 3) * 255),
+    Math.round(hue2rgb(p, q, h) * 255),
+    Math.round(hue2rgb(p, q, h - 1 / 3) * 255),
+  ];
+}
+function deriveMoodBackground(auraHex) {
+  const { h, s } = hexToHsl(auraHex);
+  const sat = Math.max(s, 35);
+  const stops = [
+    { l: 9, pos: 0 }, { l: 17, pos: 35 }, { l: 8, pos: 65 }, { l: 4, pos: 100 },
+  ];
+  const rgbStops = stops.map(st => ({ ...st, rgb: hslToRgb(h, sat, st.l) }));
+  const toHex = (v) => v.toString(16).padStart(2, "0");
+  return `linear-gradient(135deg, ${rgbStops.map(st => `#${st.rgb.map(toHex).join("")} ${st.pos}%`).join(", ")})`;
+}
+const THEME_REDBROWN = "linear-gradient(135deg, #2C0A0A 0%, #1A0A08 30%, #2E1008 60%, #1C0606 100%)";
+const THEME_GTA5 = "linear-gradient(135deg, #4A2411 0%, #6B3410 30%, #2B1440 65%, #10081F 100%)";
+const THEME_GTA6 = "linear-gradient(135deg, #2B0B3D 0%, #5C1257 35%, #1B0A38 65%, #0D0420 100%)";
+const THEME_SANANDREAS = "linear-gradient(135deg, #1B2E0A 0%, #2E4D0F 30%, #4A2E0A 65%, #1A0F05 100%)";
+const THEME_DUBAI = "linear-gradient(135deg, #2A1F0A 0%, #4A3410 30%, #1F1508 65%, #0D0904 100%)";
+const THEME_MIAMI = "linear-gradient(135deg, #0A3D3D 0%, #0F5C5C 30%, #4D1F3D 65%, #1F0A1A 100%)";
+const THEME_WC2014 = "linear-gradient(135deg, #003D2E 0%, #00523D 30%, #002B4D 65%, #001220 100%)";
+const THEME_NOSTALGIA2014 = "linear-gradient(135deg, #3D2B1F 0%, #5C4530 30%, #2E2015 65%, #150F0A 100%)";
+const THEME_FOCUS = "linear-gradient(135deg, #1A1D1F 0%, #14171A 30%, #0F1113 65%, #0A0B0D 100%)";
+const THEME_ORIGINAL = INK;
+const THEME_PRESETS = [
+  { id: "mood", label: "Mood (Auto)" },
+  { id: "original", label: "Original" },
+  { id: "redbrown", label: "Redbrown" },
+  { id: "gta5", label: "GTA V" },
+  { id: "gta6", label: "GTA VI" },
+  { id: "sanandreas", label: "San Andreas" },
+  { id: "dubai", label: "Dubai" },
+  { id: "miami", label: "Miami" },
+  { id: "wc2014", label: "2014 World Cup" },
+  { id: "nostalgia2014", label: "2014 Nostalgia" },
+  { id: "focus", label: "Focus Mode" },
+];
+function resolveBackgroundTheme(themeChoice, todayMoodAura) {
+  if (themeChoice === "original") return THEME_ORIGINAL;
+  if (themeChoice === "gta5") return THEME_GTA5;
+  if (themeChoice === "gta6") return THEME_GTA6;
+  if (themeChoice === "sanandreas") return THEME_SANANDREAS;
+  if (themeChoice === "dubai") return THEME_DUBAI;
+  if (themeChoice === "miami") return THEME_MIAMI;
+  if (themeChoice === "wc2014") return THEME_WC2014;
+  if (themeChoice === "nostalgia2014") return THEME_NOSTALGIA2014;
+  if (themeChoice === "focus") return THEME_FOCUS;
+  if (themeChoice === "mood") {
+    if (todayMoodAura) return deriveMoodBackground(todayMoodAura);
+    return THEME_REDBROWN;
+  }
+  return THEME_REDBROWN;
+}
 const LS_KEY = "sa_finances_v1";
 const CURRENCY = "MAD";
 const INVEST_PCT = 0.8;
@@ -47,6 +419,11 @@ async function cloudSave(key, val) {
 // Mirrors the main app's GOALS_2026 names, so a spend here can be linked to
 // a goal there — The Process reads this same "sa_finances_v1" cloud record
 // and sums "out" transactions whose linkedGoal matches a goal's name.
+const TX_TYPES_KEY_IN = "sa_tx_types_in";
+const TX_TYPES_KEY_OUT = "sa_tx_types_out";
+const DEFAULT_TX_TYPES_IN = ["Trading", "Business", "Family", "Other"];
+const DEFAULT_TX_TYPES_OUT = ["Trading", "Shopping", "Bills", "Transport", "Loan", "Other"];
+
 const LINKABLE_2026_GOALS = [
   "Special Ashraf Self-Date", '"Special" Necklace', '"77" Necklace', "Ramadan Vibes", "Ramadan Food",
   "Special Ashraf Jerseys 1", "Special Ashraf Caps 1", "300$ Wealth", "Special Ashraf Clothes 1",
@@ -66,7 +443,7 @@ const store = {
     try { const r = localStorage.getItem(LS_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
   },
   save(data) {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch {}
+    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch { }
   },
 };
 
@@ -83,36 +460,112 @@ const fmt = (n) => {
 };
 
 /* ─── Fonts + global ─── */
-function GlobalStyle() {
+function GlobalStyle({ bg }) {
+  useEffect(() => {
+    let tag = document.querySelector('meta[name="viewport"]');
+    if (!tag) {
+      tag = document.createElement("meta");
+      tag.name = "viewport";
+      document.head.appendChild(tag);
+    }
+    tag.content = "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover";
+  }, []);
+
   return (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Cormorant:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Cormorant:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Cinzel:wght@400;500;600;700;900&display=swap');
       * { box-sizing: border-box; margin: 0; padding: 0; }
-      html, body, #root { min-height: 100%; background: ${INK}; }
-      ::-webkit-scrollbar { width: 4px; height: 4px; }
-      ::-webkit-scrollbar-track { background: transparent; }
-      ::-webkit-scrollbar-thumb { background: rgba(201,168,76,0.3); border-radius: 1px; }
-      input, textarea, button { font-family: inherit; outline: none; }
+      html, body, #root { min-height: 100%; background: ${bg}; background-attachment: fixed; scrollbar-width: none; -ms-overflow-style: none; }
+      * { scrollbar-width: none; -ms-overflow-style: none; }
+      ::-webkit-scrollbar { display: none; width: 0; height: 0; }
+      input, textarea, button { font-family: inherit; outline: none; -webkit-tap-highlight-color: transparent; }
+      * { -webkit-tap-highlight-color: transparent; }
       input::placeholder, textarea::placeholder { color: rgba(250,248,243,0.25); font-style: italic; }
+      body, .sa-container { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+      input, textarea { -webkit-user-select: text; user-select: text; }
+      input[type="number"] { -moz-appearance: textfield; }
+      input[type="number"]::-webkit-inner-spin-button,
+      input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
       @keyframes saFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
       @keyframes saDiamond { from { transform: rotate(0deg) scale(0.6); opacity: 0; } to { transform: rotate(45deg) scale(1); opacity: 1; } }
       @keyframes saGlowPulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+      @keyframes saShimmer { 0% { background-position: 0% center; } 100% { background-position: -300% center; } }
+      .sa-gold-shimmer {
+        background: linear-gradient(100deg, #3D2B06 0%, #6B4E0A 12%, #8B6914 22%, #6B4E0A 32%, #3D2B06 42%, #6B4E0A 54%, #A8842E 64%, #6B4E0A 74%, #3D2B06 84%, #6B4E0A 92%, #3D2B06 100%);
+        background-size: 300% auto;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: saShimmer 30s linear infinite;
+      }
       @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+      /* ── Mobile ── */
+      @media (max-width: 600px) {
+        .sa-container { padding: 0 calc(14px + env(safe-area-inset-right)) calc(116px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left)) !important; }
+        .sa-header { padding: calc(28px + env(safe-area-inset-top)) 0 20px !important; }
+        .sa-eyebrow { font-size: 9px !important; letter-spacing: 0.32em !important; }
+        .sa-nav {
+          gap: 4px !important; flex-wrap: nowrap !important; width: 100% !important;
+          position: fixed !important; bottom: 0 !important; left: 0 !important; right: 0 !important;
+          margin-bottom: 0 !important; z-index: 50 !important;
+          background: radial-gradient(ellipse at 20% 0%, rgba(201,168,76,0.06) 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, rgba(201,168,76,0.05) 0%, transparent 50%), ${bg} !important;
+          background-attachment: fixed !important;
+          backdrop-filter: blur(12px) !important; -webkit-backdrop-filter: blur(12px) !important;
+          padding: 6px calc(4px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left)) !important;
+        }
+        .sa-nav-btn { flex: 1 1 0 !important; padding: 6px 4px !important; font-size: 9.5px !important; letter-spacing: 0.02em !important; white-space: nowrap !important; border: none !important; border-bottom: none !important; -webkit-appearance: none !important; appearance: none !important; }
+        .sa-topbar {
+          display: block !important;
+          position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important;
+          height: env(safe-area-inset-top) !important;
+          background: rgba(5,3,0,0.96) !important;
+          backdrop-filter: blur(12px) !important; -webkit-backdrop-filter: blur(12px) !important;
+          z-index: 50 !important;
+        }
+        .sa-balance-section { padding: 26px 16px 22px !important; margin-bottom: 16px !important; }
+        .sa-split-grid { gap: 10px !important; margin-bottom: 16px !important; }
+        .sa-split-card { padding: 18px 18px 16px !important; }
+        .sa-period-grid { gap: 10px !important; margin-bottom: 18px !important; }
+        .sa-flow-section { padding: 18px 16px 12px !important; }
+        .sa-form-section { padding: 18px 16px 16px !important; margin-bottom: 22px !important; }
+        .sa-form-row { flex-direction: column !important; }
+        .sa-form-row > div { flex: 1 1 auto !important; min-width: 0 !important; width: 100% !important; }
+        .sa-ledger-row { flex-wrap: wrap !important; gap: 6px 10px !important; padding: 12px 14px !important; }
+        .sa-ledger-amt { font-size: 16px !important; }
+        .sa-plan-header { flex-direction: column !important; align-items: flex-start !important; gap: 10px !important; }
+        .sa-plan-grid { gap: 10px !important; }
+        .sa-plan-card { padding: 18px 18px 16px !important; }
+        .sa-plan-achieved { padding: 26px 16px 22px !important; }
+        .sa-yearly-split { flex-direction: column !important; gap: 20px !important; }
+        .sa-yearly-split > div { flex: 0 1 auto !important; }
+        .sa-yearly-divider { width: 100% !important; height: 1px !important; margin: 0 auto !important; }
+        .sa-filter-row { gap: 6px !important; }
+        .sa-icon-btn { width: 32px !important; height: 34px !important; font-size: 13px !important; }
+        .sa-flow-filter-group { flex: 1 1 0 !important; min-width: 0 !important; }
+        .sa-flow-filter-btn { flex: 1 1 0 !important; padding: 8px 4px !important; font-size: 9.5px !important; letter-spacing: 0.02em !important; white-space: nowrap !important; }
+        .sa-profit-grid { gap: 6px !important; }
+        .sa-profit-value { font-size: 11px !important; }
+        .sa-profit-value span { font-size: 8px !important; }
+        .sa-balance-grid { gap: 6px !important; }
+        .sa-balance-value { font-size: 15px !important; }
+        .sa-balance-value span { font-size: 8.5px !important; }
+      }
     `}</style>
   );
 }
 
 /* ─── Ornamental background ─── */
-function LuxuryBg() {
+function LuxuryBg({ bg }) {
   return (
     <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
-      <div style={{ position: "absolute", inset: 0, background: `radial-gradient(ellipse at 20% 0%, rgba(201,168,76,0.06) 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, rgba(201,168,76,0.05) 0%, transparent 50%), ${INK}` }} />
+      <div style={{ position: "absolute", inset: 0, background: `radial-gradient(ellipse at 20% 0%, rgba(201,168,76,0.06) 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, rgba(201,168,76,0.05) 0%, transparent 50%), ${bg}` }} />
       {/* Frame lines */}
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "2px", background: `linear-gradient(90deg, transparent, ${GOLD} 30%, ${GOLD_LIGHT} 50%, ${GOLD} 70%, transparent)` }} />
       <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "1px", background: "linear-gradient(90deg, transparent, rgba(201,168,76,0.4) 50%, transparent)" }} />
       {/* Corner marks */}
-      {[["12px","12px","0,10 0,0 10,0"],["12px",null,"10,0 20,0 20,10"],[null,"12px","0,10 0,20 10,20"],[null,null,"10,20 20,20 20,10"]].map(([top,left,pts],i)=>(
-        <svg key={i} width="20" height="20" style={{ position:"absolute", top: top||"auto", bottom: top?"auto":"12px", left: left||"auto", right: left?"auto":"12px", opacity: 0.5 }}>
+      {[["12px", "12px", "0,10 0,0 10,0"], ["12px", null, "10,0 20,0 20,10"], [null, "12px", "0,10 0,20 10,20"], [null, null, "10,20 20,20 20,10"]].map(([top, left, pts], i) => (
+        <svg key={i} width="20" height="20" style={{ position: "absolute", top: top || "auto", bottom: top ? "auto" : "12px", left: left || "auto", right: left ? "auto" : "12px", opacity: 0.5 }}>
           <polyline points={pts} fill="none" stroke={GOLD} strokeWidth="1.5" />
         </svg>
       ))}
@@ -122,6 +575,9 @@ function LuxuryBg() {
 
 /* ─── Diamond checkbox-style toggle (in / out) ─── */
 function FlowToggle({ value, onChange }) {
+  const ICE = "#8FD0EE";
+  const ICE_LIGHT = "#E4F8FF";
+  const ICE_DEEP = "#3E7CA3";
   return (
     <div style={{ display: "flex", gap: "10px" }}>
       {[
@@ -129,19 +585,21 @@ function FlowToggle({ value, onChange }) {
         { id: "out", label: "Money Out" },
       ].map((opt) => {
         const active = value === opt.id;
-        const color = opt.id === "in" ? GOLD : "rgba(250,248,243,0.7)";
+        const color = opt.id === "in" ? GOLD : ICE;
         return (
           <button key={opt.id} onClick={() => onChange(opt.id)} style={{
             flex: 1, padding: "13px 10px", cursor: "pointer",
-            background: active ? (opt.id === "in" ? "rgba(201,168,76,0.12)" : "rgba(250,248,243,0.06)") : "transparent",
-            border: `1px solid ${active ? (opt.id === "in" ? "rgba(201,168,76,0.6)" : "rgba(250,248,243,0.3)") : "rgba(201,168,76,0.15)"}`,
+            background: active ? (opt.id === "in" ? "rgba(201,168,76,0.12)" : "rgba(143,208,238,0.10)") : "transparent",
+            border: `1px solid ${active ? (opt.id === "in" ? "rgba(201,168,76,0.6)" : "rgba(143,208,238,0.55)") : "rgba(201,168,76,0.15)"}`,
             borderRadius: "1px", display: "flex", alignItems: "center", justifyContent: "center", gap: "9px",
+            boxShadow: active && opt.id === "out" ? "0 0 14px rgba(143,208,238,0.35), inset 0 0 10px rgba(143,208,238,0.08)" : "none",
             transition: "all 0.25s ease",
           }}>
             <span style={{
               width: "8px", height: "8px", display: "inline-block",
               border: `1.5px solid ${active ? color : "rgba(201,168,76,0.3)"}`,
               background: active ? color : "transparent",
+              boxShadow: active && opt.id === "out" ? "0 0 7px rgba(143,208,238,0.9)" : "none",
               transform: "rotate(45deg)",
               animation: active ? "saDiamond 0.3s ease" : "none",
               transition: "all 0.25s ease",
@@ -149,7 +607,15 @@ function FlowToggle({ value, onChange }) {
             <span style={{
               fontFamily: "'Cormorant', serif", fontSize: "15px", fontWeight: 600,
               letterSpacing: "0.14em", textTransform: "uppercase",
-              color: active ? (opt.id === "in" ? GOLD_LIGHT : CREAM) : "rgba(250,248,243,0.4)",
+              ...(active
+                ? (opt.id === "in"
+                    ? { color: GOLD_LIGHT }
+                    : {
+                        background: `linear-gradient(160deg, ${ICE_LIGHT} 0%, ${ICE} 45%, ${ICE_DEEP} 100%)`,
+                        WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                        filter: "drop-shadow(0 0 5px rgba(143,208,238,0.5))",
+                      })
+                : { color: "rgba(250,248,243,0.4)" }),
             }}>{opt.label}</span>
           </button>
         );
@@ -171,7 +637,12 @@ function PeriodChip({ label, net, inAmt, outAmt }) {
       <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.22em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "8px" }}>{label}</div>
       <div style={{
         fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
-        color: pos ? GOLD_LIGHT : neg ? "rgba(250,248,243,0.85)" : "rgba(250,248,243,0.45)",
+        ...(pos
+          ? {
+              background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+              WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+            }
+          : { color: neg ? "rgba(250,248,243,0.85)" : "rgba(250,248,243,0.45)" }),
       }}>
         {pos ? "+" : ""}{fmt(net)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", letterSpacing: "0.1em", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
       </div>
@@ -244,12 +715,109 @@ function FlowChart({ txs }) {
   );
 }
 
+function ThemePickerPanel({ current, onSelect, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200,
+        background: "rgba(0,0,0,0.6)", backdropFilter: "blur(6px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: "24px",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: INK, border: "1px solid rgba(201,168,76,0.35)", borderRadius: "1px",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+          padding: "22px 18px", width: "100%", maxWidth: "230px", textAlign: "center",
+        }}
+      >
+        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "12px", letterSpacing: "0.2em", fontWeight: 700, color: GOLD, textTransform: "uppercase", marginBottom: "14px" }}>Theme</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "7px", maxHeight: "260px", overflowY: "auto" }}>
+          {THEME_PRESETS.map((p) => (
+            <div
+              key={p.id}
+              onClick={() => { onSelect(p.id); onClose(); }}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "9px 12px", borderRadius: "1px", cursor: "pointer", flexShrink: 0,
+                background: current === p.id ? "rgba(201,168,76,0.18)" : "rgba(201,168,76,0.05)",
+                border: current === p.id ? "1px solid rgba(201,168,76,0.55)" : "1px solid rgba(201,168,76,0.18)",
+              }}
+            >
+              <span style={{ fontFamily: "'Playfair Display', serif", fontSize: "12px", fontWeight: 700, color: current === p.id ? GOLD_LIGHT : "rgba(201,168,76,0.75)" }}>{p.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════════ APP ═══════════════════════ */
 export default function App() {
   const [tab, setTab] = useState("dashboard");
   const [fin, setFin] = useState(() => store.load() || { txs: [] });
   const loaded = useRef(false);
   const [cloudReady, setCloudReady] = useState(false);
+
+  const [themeChoice, setThemeChoiceRaw] = useState(() => {
+    try { return localStorage.getItem("sa_theme_choice") || "mood"; } catch { return "mood"; }
+  });
+  const [themePanelOpen, setThemePanelOpen] = useState(false);
+  const [todayMoodAura, setTodayMoodAura] = useState(null);
+  const setThemeChoice = (choice) => {
+    setThemeChoiceRaw(choice);
+    try { localStorage.setItem("sa_theme_choice", choice); } catch { }
+    cloudSave("sa_theme_choice", choice);
+  };
+  useEffect(() => {
+    cloudLoad("sa_theme_choice").then((saved) => {
+      if (saved) {
+        setThemeChoiceRaw(saved);
+        try { localStorage.setItem("sa_theme_choice", saved); } catch { }
+      }
+    });
+    // Reads Companion's daily mood-character pick from the shared cloud
+    // store so "Mood (Auto)" matches it here too.
+    cloudLoad("sa_mood_character").then((chars) => {
+      const charId = chars && chars[themeDayKey()];
+      if (charId && MOOD_AURA_BY_ID[charId]) setTodayMoodAura(MOOD_AURA_BY_ID[charId]);
+    });
+  }, []);
+  const resolvedBg = resolveBackgroundTheme(themeChoice, todayMoodAura);
+
+  // ── The Plan — mirrors this month's target/Earned figures from the main
+  // app's Special Ashraf Finances Money page (The Process). We don't have
+  // access to that codebase's goal/ledger logic here, so the main app
+  // publishes a small summary to a shared key and we just read it. ──
+  const PLAN_SUMMARY_KEY = "sa_finance_plan_current_month";
+  const [planSummary, setPlanSummary] = useState(() => {
+    try { const r = localStorage.getItem(PLAN_SUMMARY_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
+  });
+  const [refreshingPlan, setRefreshingPlan] = useState(false);
+  // Pulls both this app's own transaction log AND the main app's published
+  // plan summary from the cloud in one go — one button, both refreshed.
+  const refreshFromMainApp = () => {
+    setRefreshingPlan(true);
+    Promise.all([
+      cloudLoad(PLAN_SUMMARY_KEY).then((remote) => {
+        if (remote) {
+          setPlanSummary(remote);
+          try { localStorage.setItem(PLAN_SUMMARY_KEY, JSON.stringify(remote)); } catch { }
+        }
+      }),
+      cloudLoad(LS_KEY).then((remote) => {
+        if (remote && Array.isArray(remote.txs)) {
+          setFin(remote);
+          store.save(remote);
+        }
+      }),
+    ]).finally(() => setRefreshingPlan(false));
+  };
+  useEffect(() => { refreshFromMainApp(); }, []);
 
   useEffect(() => {
     cloudLoad(LS_KEY).then((remote) => {
@@ -267,9 +835,31 @@ export default function App() {
     if (cloudReady) cloudSave(LS_KEY, fin);
   }, [fin, cloudReady]);
 
+  /* ─── Capital — set in the main app (The Process → Special Ashraf
+     Finances), read-only here. Added on top of the running transaction
+     total but NEVER counted as money in or out: every in/out/net figure
+     below still comes purely from txs. If every transaction is deleted,
+     the balance floor is this capital, not 0. ─── */
+  const CAPITAL_KEY = "sa_capital";
+  const [capital, setCapital] = useState(() => {
+    try { const r = localStorage.getItem(CAPITAL_KEY); return r ? parseFloat(r) || 0 : 0; } catch { return 0; }
+  });
+  useEffect(() => {
+    const pull = () => cloudLoad(CAPITAL_KEY).then((remote) => {
+      if (typeof remote === "number") {
+        setCapital(remote);
+        try { localStorage.setItem(CAPITAL_KEY, String(remote)); } catch { }
+      }
+    });
+    pull();
+    const iv = setInterval(pull, 60000);
+    return () => clearInterval(iv);
+  }, []);
+
   /* ─── Derived ─── */
   const txs = fin.txs;
-  const balance = useMemo(() => txs.reduce((a, t) => a + (t.type === "in" ? t.amount : -t.amount), 0), [txs]);
+  const txsBalance = useMemo(() => txs.reduce((a, t) => a + (t.type === "in" ? t.amount : -t.amount), 0), [txs]);
+  const balance = capital + txsBalance;
   const invested = balance > 0 ? balance * INVEST_PCT : 0;
   const toSpend = balance > 0 ? balance * (1 - INVEST_PCT) : Math.max(balance, 0);
 
@@ -284,35 +874,291 @@ export default function App() {
   const pMonth = period((t) => t.date.startsWith(mk));
   const pAll = period(() => true);
 
+  // ── Working days (Mon–Fri) left in the current month, today counted as
+  // still remaining if it's itself a weekday. Computed first since Daily
+  // Target now divides by this real count instead of a flat 20. ──
+  const workingDaysLeft = (() => {
+    const now = new Date();
+    const year = now.getFullYear(), month = now.getMonth();
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    let count = 0;
+    for (let d = now.getDate(); d <= lastDay; d++) {
+      const dow = new Date(year, month, d).getDay(); // 0 Sun … 6 Sat
+      if (dow >= 1 && dow <= 5) count++;
+    }
+    return count;
+  })();
+
+  // ── Daily Target InshaALLAH SWT ──
+  // (This Month Target − money already made this month, NOT counting today)
+  // ÷ real workdays left this month (Mon–Fri only, weekends excluded) — not
+  // a flat 20, so the target genuinely tightens as the month's real
+  // remaining business days shrink. Frozen for the whole calendar day —
+  // today's own earnings don't move the target mid-day, they only move the
+  // "done today" side of the ratio below. Naturally flips at midnight since
+  // it's keyed off tk/mk (and workingDaysLeft recomputes from the real date).
+  const achievedBeforeToday = period((t) => t.date.startsWith(mk) && t.date !== tk).net;
+  const dailyTarget = planSummary && planSummary.target != null && workingDaysLeft > 0
+    ? Math.max(0, (planSummary.target - achievedBeforeToday) / workingDaysLeft)
+    : null;
+
+  const doneTodayMAD = pToday.net;
+  const dailyPct = dailyTarget && dailyTarget > 0
+    ? Math.round((doneTodayMAD / dailyTarget) * 100)
+    : (doneTodayMAD > 0 ? 100 : 0);
+  const dailyPctColor = dailyPct <= 100 ? GOLD_LIGHT : "#C0392B";
+
+  // ── Tomorrow's target — same formula, but with today's earnings folded
+  // into "already made this month" once today is done, and one fewer
+  // workday remaining (tomorrow itself is excluded if it's a weekday, since
+  // by definition it's the day being targeted, not a day "left before it").
+  const workingDaysLeftAfterToday = Math.max(0, workingDaysLeft - (([0, 6].includes(new Date().getDay())) ? 0 : 1));
+  const tomorrowTarget = planSummary && planSummary.target != null && workingDaysLeftAfterToday > 0
+    ? Math.max(0, (planSummary.target - (achievedBeforeToday + doneTodayMAD)) / workingDaysLeftAfterToday)
+    : null;
+
+  // ── Monthly Target — money earned this month vs This Month Target ──
+  const monthlyPct = planSummary && planSummary.target > 0
+    ? Math.round((pMonth.net / planSummary.target) * 100)
+    : 0;
+  const monthlyPctColor = monthlyPct >= 100 ? GOLD_LIGHT : monthlyPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+
+  // ── Yearly Target — money in during the rolling "this age" window vs
+  // Total Surplus target, and actual balance vs Balance-at-End-of-Age target.
+  const yearInAmt = (planSummary && planSummary.yearRangeStartISO)
+    ? txs.filter((t) => t.type === "in" && t.date >= planSummary.yearRangeStartISO && t.date < planSummary.yearRangeEndISO)
+      .reduce((s, t) => s + t.amount, 0)
+    : 0;
+  const yearSurplusPct = planSummary && planSummary.yearSurplusTarget > 0
+    ? Math.round((yearInAmt / planSummary.yearSurplusTarget) * 100) : 0;
+  const yearBalancePct = planSummary && planSummary.yearEndBalanceTarget > 0
+    ? Math.round((balance / planSummary.yearEndBalanceTarget) * 100) : 0;
+
+  // Pace — Actual Balance vs. this month's Starting Bal., translated into a
+  // plain-language status instead of a raw percentage.
+  const pacePct = planSummary?.startingBalance ? Math.round((balance / planSummary.startingBalance) * 100) : null;
+  const GOLD_TEXT_STYLE = { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" };
+  const paceInfo = pacePct == null ? null
+    : pacePct > 120 ? { label: "Plays Aggressive", style: { color: "#C0392B" } }
+    : pacePct >= 95 ? { label: "Plays Great", style: GOLD_TEXT_STYLE }
+    : pacePct >= 90 ? { label: "Plays Good", style: GOLD_TEXT_STYLE }
+    : pacePct >= 85 ? { label: "Must Get Better", style: { color: "#D98E34" } }
+    : { label: "Playing Bad, Fix The Situation", style: { color: "#C0392B" } };
+  // Published so the companion app's Essentials section can show this
+  // same number without recomputing balance/plan logic itself.
+  useEffect(() => { cloudSave("sa_finance_pace", pacePct); }, [pacePct]);
+  const yearSurplusColor = yearSurplusPct >= 100 ? GOLD_LIGHT : yearSurplusPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+  const yearBalanceColor = yearBalancePct >= 100 ? GOLD_LIGHT : yearBalancePct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+
+  // ── Spending vs the 20% "To Spend" allowance ──
+  // Shows money out against the allowance that period's earnings justify
+  // (money in × 20%), plus the raw difference underneath.
+  const spendFor = (pred) => {
+    const p = period(pred);
+    const allowance = p.inAmt * 0.20;
+    return { out: p.outAmt, allowance, diff: p.outAmt - allowance };
+  };
+
+  // ── Daily allowance ──
+  // This month's 20% allowance, capped at This Month Target, minus whatever
+  // has already gone out this month before today — i.e. what's genuinely
+  // left to spend today rather than a flat share.
+  // The spending "day" runs 6am → 6am, not midnight → midnight: anything
+  // logged between midnight and 5:59am still belongs to the previous day.
+  const spendingDayKey = (() => {
+    const now = new Date();
+    if (now.getHours() < 6) now.setDate(now.getDate() - 1);
+    return now.toISOString().slice(0, 10);
+  })();
+  const isTodaySpending = (t) => {
+    if (!t.ts) return t.date === spendingDayKey;
+    const d = new Date(t.ts);
+    if (d.getHours() < 6) d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10) === spendingDayKey;
+  };
+
+  const monthIn = period((t) => t.date && t.date.startsWith(monthKey())).inAmt;
+  const monthAllowanceCapped = planSummary?.monthlyNeeded != null
+    ? Math.min(monthIn * 0.20, planSummary.monthlyNeeded)
+    : monthIn * 0.20; 3
+  const outThisMonthExceptToday = period((t) => t.date && t.date.startsWith(monthKey()) && !isTodaySpending(t)).outAmt;
+  const outToday = period(isTodaySpending).outAmt;
+  const dailyRemainingAllowance = monthAllowanceCapped - outThisMonthExceptToday;
+  const dailyPctOfMonthAllowance = monthAllowanceCapped > 0
+    ? Math.round((outToday / monthAllowanceCapped) * 100)
+    : 0;
+  const spendRows = [
+    { label: "All Time", sub: "Special Ashraf Journey", data: spendFor(() => true) },
+    {
+      label: "Yearly",
+      sub: String(new Date().getFullYear()),
+      // Resets every calendar year. Allowance is capped at This Month
+      // Needed × every month that's happened so far this year (Jan through
+      // the current month, inclusive) — not the raw 20%-of-earnings figure.
+      data: (() => {
+        const curYear = new Date().getFullYear();
+        const curMonth = new Date().getMonth() + 1; // 1-12
+        // The first year of tracking counts from whichever month real data
+        // actually starts (e.g. Aug 2026 = month 1, Sep 2026 = month 2, …).
+        // Every year after that is a full calendar year, so it counts from
+        // January like normal (Jan 2027 = month 1, Feb 2027 = month 2, …).
+        const firstTxDate = txs.length ? txs.reduce((min, t) => (t.date < min ? t.date : min), txs[0].date) : null;
+        const firstTxYear = firstTxDate ? parseInt(firstTxDate.slice(0, 4), 10) : curYear;
+        const firstTxMonth = firstTxDate ? parseInt(firstTxDate.slice(5, 7), 10) : curMonth;
+        const monthsElapsed = curYear === firstTxYear ? (curMonth - firstTxMonth + 1) : curMonth;
+
+        const pYear = period((t) => t.date && t.date.startsWith(String(curYear)));
+        const rawAllowance = pYear.inAmt * 0.20;
+        const cap = planSummary?.monthlyNeeded != null ? planSummary.monthlyNeeded * monthsElapsed : null;
+        const allowance = cap != null ? Math.min(rawAllowance, cap) : rawAllowance;
+        return { out: pYear.outAmt, allowance, diff: pYear.outAmt - allowance };
+      })(),
+    },
+    {
+      label: "Monthly",
+      sub: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+      data: (() => {
+        const p = period((t) => t.date && t.date.startsWith(monthKey()));
+        const rawAllowance = p.inAmt * 0.20;
+        const allowance = planSummary?.monthlyNeeded != null ? Math.min(rawAllowance, planSummary.monthlyNeeded) : rawAllowance;
+        return { out: p.outAmt, allowance, diff: p.outAmt - allowance };
+      })(),
+    },
+    {
+      label: "Daily",
+      sub: new Date(spendingDayKey + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      data: { out: outToday, allowance: dailyRemainingAllowance, diff: outToday - dailyRemainingAllowance },
+      showPct: dailyPctOfMonthAllowance,
+    },
+  ];
+
   /* ─── Tracking form state ─── */
   const [amount, setAmount] = useState("");
   const [comment, setComment] = useState("");
   const [flow, setFlow] = useState("in");
-  const [linkedGoal, setLinkedGoal] = useState("");
+  const [incomeType, setIncomeType] = useState("");
+  const [txTypeAttempted, setTxTypeAttempted] = useState(false); // shows the required-cue only after a failed submit, not on first load
+  const [txTypesIn, setTxTypesIn] = useState(() => {
+    try { const r = localStorage.getItem(TX_TYPES_KEY_IN); return r ? JSON.parse(r) : DEFAULT_TX_TYPES_IN; } catch { return DEFAULT_TX_TYPES_IN; }
+  });
+  const [txTypesOut, setTxTypesOut] = useState(() => {
+    try { const r = localStorage.getItem(TX_TYPES_KEY_OUT); return r ? JSON.parse(r) : DEFAULT_TX_TYPES_OUT; } catch { return DEFAULT_TX_TYPES_OUT; }
+  });
+  const [addingNewType, setAddingNewType] = useState(false);
+  const [newTypeDraft, setNewTypeDraft] = useState("");
+
+  useEffect(() => {
+    cloudLoad(TX_TYPES_KEY_IN).then((remote) => {
+      if (Array.isArray(remote) && remote.length) {
+        setTxTypesIn(remote);
+        try { localStorage.setItem(TX_TYPES_KEY_IN, JSON.stringify(remote)); } catch { }
+      }
+    });
+    cloudLoad(TX_TYPES_KEY_OUT).then((remote) => {
+      if (Array.isArray(remote) && remote.length) {
+        setTxTypesOut(remote);
+        try { localStorage.setItem(TX_TYPES_KEY_OUT, JSON.stringify(remote)); } catch { }
+      }
+    });
+  }, []);
+
+  const txTypes = flow === "in" ? txTypesIn : txTypesOut;
+  const commitNewType = () => {
+    const name = newTypeDraft.trim();
+    if (!name) { setAddingNewType(false); return; }
+    const key = flow === "in" ? TX_TYPES_KEY_IN : TX_TYPES_KEY_OUT;
+    const setter = flow === "in" ? setTxTypesIn : setTxTypesOut;
+    setter((prev) => {
+      if (prev.includes(name)) return prev;
+      const next = [...prev, name];
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch { }
+      cloudSave(key, next);
+      return next;
+    });
+    setIncomeType(name);
+    setNewTypeDraft("");
+    setAddingNewType(false);
+  };
 
   const addTx = () => {
     const val = parseFloat(amount);
     if (!val || val <= 0) return;
+    if (!incomeType) { setTxTypeAttempted(true); return; } // type is mandatory now, for both flows
     const tx = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       type: flow, amount: val,
       comment: comment.trim(),
-      linkedGoal: flow === "out" ? (linkedGoal || null) : null,
+      incomeType,
       date: todayKey(),
       ts: Date.now(),
     };
     setFin((p) => ({ ...p, txs: [tx, ...p.txs] }));
-    setAmount(""); setComment(""); setLinkedGoal("");
+    setAmount(""); setComment(""); setIncomeType(""); setTxTypeAttempted(false);
   };
 
   const deleteTx = (id) => setFin((p) => ({ ...p, txs: p.txs.filter((t) => t.id !== id) }));
 
-  /* ─── Grouped ledger ─── */
-  const grouped = useMemo(() => {
-    const g = {};
-    txs.forEach((t) => { (g[t.date] = g[t.date] || []).push(t); });
-    return Object.entries(g).sort((a, b) => b[0].localeCompare(a[0]));
+  /* ─── Search + sort ───
+     Independent Year / Month / Day pickers in a calendar-style panel — any
+     subset can be set: month only, month+day (any year), year only, or all
+     three, or none (shows everything). Each field is matched only if set. */
+  const [sortBy, setSortBy] = useState("newest");
+  const [filterYear, setFilterYear] = useState("");   // "YYYY" or ""
+  const [filterMonth, setFilterMonth] = useState("");  // "01".."12" or ""
+  const [filterDay, setFilterDay] = useState("");     // "01".."31" or ""
+  const [datePanelOpen, setDatePanelOpen] = useState(false);
+  const [sortPanelOpen, setSortPanelOpen] = useState(false);
+
+  const [flowFilter, setFlowFilter] = useState("all"); // "all" | "in" | "out"
+
+  const matchesSearch = (t) => {
+    if (flowFilter !== "all" && t.type !== flowFilter) return false;
+    if (filterYear && t.date.slice(0, 4) !== filterYear) return false;
+    if (filterMonth && t.date.slice(5, 7) !== filterMonth) return false;
+    if (filterDay && t.date.slice(8, 10) !== filterDay) return false;
+    return true;
+  };
+
+  const filteredTxs = useMemo(() => txs.filter(matchesSearch), [txs, filterYear, filterMonth, filterDay, flowFilter]);
+
+  const availableYears = useMemo(() => {
+    const s = new Set(txs.map((t) => t.date.slice(0, 4)));
+    const arr = Array.from(s).sort((a, b) => b.localeCompare(a));
+    const thisYear = String(new Date().getFullYear());
+    if (!arr.includes(thisYear)) arr.unshift(thisYear);
+    return arr;
   }, [txs]);
+
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const daysInSelectedMonth = filterMonth ? new Date(2024, parseInt(filterMonth, 10), 0).getDate() : 31;
+
+  const dateFilterSummary = (() => {
+    const parts = [];
+    if (filterMonth) parts.push(MONTH_NAMES[parseInt(filterMonth, 10) - 1]);
+    if (filterDay) parts.push(filterDay);
+    if (filterYear) parts.push(filterYear);
+    return parts.length ? parts.join(" ") : null;
+  })();
+
+  const sortedTxs = useMemo(() => {
+    const arr = [...filteredTxs];
+    if (sortBy === "oldest") arr.sort((a, b) => a.ts - b.ts);
+    else if (sortBy === "amount_high") arr.sort((a, b) => b.amount - a.amount);
+    else if (sortBy === "amount_low") arr.sort((a, b) => a.amount - b.amount);
+    else arr.sort((a, b) => b.ts - a.ts); // newest
+    return arr;
+  }, [filteredTxs, sortBy]);
+
+  const isAmountSort = sortBy === "amount_high" || sortBy === "amount_low";
+
+  /* ─── Grouped ledger — only used for date-based sorts; amount sorts show
+     a flat list instead, since amount ordering cuts across day groups. ─── */
+  const grouped = useMemo(() => {
+    if (isAmountSort) return null;
+    const g = {};
+    sortedTxs.forEach((t) => { (g[t.date] = g[t.date] || []).push(t); });
+    return Object.entries(g).sort((a, b) => sortBy === "oldest" ? a[0].localeCompare(b[0]) : b[0].localeCompare(a[0]));
+  }, [sortedTxs, sortBy, isAmountSort]);
 
   const dateLabel = (key) => {
     if (key === tk) return "Today";
@@ -321,37 +1167,60 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: INK, color: CREAM, position: "relative" }}>
-      <GlobalStyle />
-      <LuxuryBg />
+    <div style={{ minHeight: "100vh", background: resolvedBg, backgroundAttachment: "fixed", color: CREAM, position: "relative" }}>
+      <GlobalStyle bg={resolvedBg} />
+      <LuxuryBg bg={resolvedBg} />
+      <div className="sa-topbar" style={{ display: "none" }} />
 
-      <div style={{ position: "relative", zIndex: 1, maxWidth: "880px", margin: "0 auto", padding: "0 22px 80px" }}>
+      <div className="sa-container" style={{ position: "relative", zIndex: 1, maxWidth: "880px", margin: "0 auto", padding: "0 calc(22px + env(safe-area-inset-right)) calc(80px + env(safe-area-inset-bottom)) calc(22px + env(safe-area-inset-left))" }}>
 
         {/* ─── Header ─── */}
-        <header style={{ textAlign: "center", padding: "46px 0 30px" }}>
-          <div style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.5em", textTransform: "uppercase", color: "rgba(201,168,76,0.7)", marginBottom: "10px" }}>Special Ashraf</div>
-          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: "clamp(30px, 5vw, 42px)", fontWeight: 600, letterSpacing: "0.06em", color: CREAM }}>
-            F I N A N C E S
+        <header className="sa-header" style={{ textAlign: "center", padding: "calc(26px + env(safe-area-inset-top)) 0 18px" }}>
+          <h1
+            key={tab}
+            onClick={() => setThemePanelOpen(true)}
+            style={{
+              fontFamily: "'Cinzel', serif", fontSize: "clamp(14px, 3.2vw, 17px)", fontWeight: 700,
+              letterSpacing: "0.08em", lineHeight: 1.3, textTransform: "uppercase", whiteSpace: "nowrap",
+              background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+              WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+              animation: "saFadeUp 0.4s ease", cursor: "pointer",
+            }}>
+            Special Ashraf Finances
+            <span style={{
+              display: "block", fontFamily: "'Cinzel', serif", fontWeight: 500,
+              fontSize: "9px", letterSpacing: "0.45em", marginTop: "3px",
+            }}>
+              The Money Game
+            </span>
           </h1>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "12px", marginTop: "14px" }}>
-            <div style={{ width: "60px", height: "1px", background: "linear-gradient(90deg, transparent, rgba(201,168,76,0.6))" }} />
-            <span style={{ width: "6px", height: "6px", border: `1px solid ${GOLD}`, transform: "rotate(45deg)", display: "inline-block" }} />
-            <div style={{ width: "60px", height: "1px", background: "linear-gradient(90deg, rgba(201,168,76,0.6), transparent)" }} />
-          </div>
         </header>
 
+        {themePanelOpen && (
+          <ThemePickerPanel
+            current={themeChoice}
+            onSelect={setThemeChoice}
+            onClose={() => setThemePanelOpen(false)}
+          />
+        )}
+
         {/* ─── Nav ─── */}
-        <nav style={{ display: "flex", justifyContent: "center", gap: "6px", marginBottom: "38px" }}>
-          {[["dashboard", "Dashboard"], ["tracking", "Tracking"]].map(([id, label]) => {
+        <nav className="sa-nav" style={{ display: "flex", justifyContent: "center", gap: "6px", marginBottom: "38px", flexWrap: "wrap" }}>
+          {[["dashboard", "Dashboard"], ["tracking", "Tracking"], ["plan", "The Plan"], ["trading", "Trading"]].map(([id, label]) => {
             const active = tab === id;
             return (
-              <button key={id} onClick={() => setTab(id)} style={{
-                padding: "11px 34px", cursor: "pointer", background: active ? "rgba(201,168,76,0.1)" : "transparent",
-                border: "none", borderBottom: `1px solid ${active ? GOLD : "rgba(201,168,76,0.15)"}`,
+              <button key={id} className="sa-nav-btn" onClick={() => setTab(id)} style={{
+                padding: "11px 34px", cursor: "pointer", background: "transparent",
+                border: "none",
                 fontFamily: "'Cormorant', serif", fontSize: "15px", fontWeight: 600,
                 letterSpacing: "0.24em", textTransform: "uppercase",
-                color: active ? GOLD_LIGHT : "rgba(250,248,243,0.4)",
-                transition: "all 0.3s ease",
+                transition: "color 0.3s ease", flex: "0 1 auto",
+                ...(active
+                  ? {
+                      background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+                      WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                    }
+                  : { color: "rgba(201,168,76,0.55)" }),
               }}>{label}</button>
             );
           })}
@@ -362,44 +1231,247 @@ export default function App() {
           <div style={{ animation: "saFadeUp 0.45s ease" }}>
 
             {/* Actual balance */}
-            <section style={{
+            <section className="sa-balance-section" style={{
               textAlign: "center", padding: "38px 20px 34px", marginBottom: "22px",
               border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px", position: "relative",
               background: "radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.08) 0%, transparent 65%)",
             }}>
               <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: "120px", height: "2px", background: `linear-gradient(90deg, transparent, ${GOLD}, transparent)`, animation: "saGlowPulse 4s ease infinite" }} />
               <div style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.35em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "14px" }}>Actual Balance</div>
-              <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "clamp(42px, 8vw, 64px)", fontWeight: 600, color: GOLD_LIGHT, lineHeight: 1, textShadow: "0 0 40px rgba(201,168,76,0.25)" }}>
+              <div className="sa-gold-shimmer" style={{ fontFamily: "'Playfair Display', serif", fontSize: "clamp(42px, 8vw, 64px)", fontWeight: 600, lineHeight: 1, textShadow: "0 0 40px rgba(201,168,76,0.25)" }}>
                 {fmt(balance)}
               </div>
               <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "15px", letterSpacing: "0.2em", color: "rgba(201,168,76,0.7)", marginTop: "10px" }}>{CURRENCY}</div>
+
+              {/* Invested / To Spend */}
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "28px", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid rgba(201,168,76,0.15)" }}>
+                <div style={{ textAlign: "center", flex: 1 }}>
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "6px" }}>Level</div>
+                  <div style={{
+                    fontFamily: "'Playfair Display', serif", fontSize: "20px", fontWeight: 600,
+                    ...(!planSummary?.monthlyStartingBalances
+                      ? { color: "rgba(201,168,76,0.4)" }
+                      : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                  }}>
+                    {!planSummary?.monthlyStartingBalances ? "—" : planSummary.monthlyStartingBalances.filter((sb) => balance >= sb).length}
+                  </div>
+                </div>
+                <div style={{ width: "1px", background: "rgba(201,168,76,0.2)" }} />
+                <div style={{ textAlign: "center", flex: 1 }}>
+                  <div style={{
+                    fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 700, lineHeight: 1.3,
+                    ...(paceInfo ? paceInfo.style : { color: "rgba(201,168,76,0.4)" }),
+                  }}>
+                    {paceInfo ? paceInfo.label : "—"}
+                  </div>
+                </div>
+              </div>
             </section>
 
-            {/* 80 / 20 split */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", marginBottom: "22px" }}>
-              {[
-                { label: "Invested", pct: "80%", val: invested, note: "Working capital — untouchable" },
-                { label: "To Spend", pct: "20%", val: toSpend, note: "Living allocation" },
-              ].map((c) => (
-                <div key={c.label} style={{
-                  border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "24px 24px 20px",
-                  position: "relative", background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+            {/* Daily Target InshaALLAH SWT + Daily Spending — side by side */}
+            <div style={{ display: "flex", gap: "22px", flexWrap: "wrap", marginBottom: "22px" }}>
+              {dailyTarget != null && (
+                <section className="sa-balance-section" style={{
+                  flex: "1 1 260px", textAlign: "center", padding: "26px 20px",
+                  border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                  background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                  minHeight: "190px", boxSizing: "border-box",
+                  display: "flex", flexDirection: "column", justifyContent: "center",
                 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "12px" }}>
-                    <span style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.26em", textTransform: "uppercase", color: "rgba(201,168,76,0.8)" }}>{c.label}</span>
-                    <span style={{ fontFamily: "'Playfair Display', serif", fontStyle: "italic", fontSize: "14px", color: "rgba(201,168,76,0.55)" }}>{c.pct}</span>
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
+                    Daily Target InshaALLAH SWT
+                    <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                      {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                      {tomorrowTarget != null && (
+                        <span style={{ color: "rgba(201,168,76,0.4)" }}> · tomorrow {fmt(tomorrowTarget)} {CURRENCY}</span>
+                      )}
+                    </span>
                   </div>
-                  <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "30px", fontWeight: 600, color: CREAM }}>
-                    {fmt(c.val)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", letterSpacing: "0.12em", color: "rgba(201,168,76,0.6)" }}>{CURRENCY}</span>
+                  <div style={{
+                    fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                    background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                  }}>
+                    {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                   </div>
-                  <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "13.5px", color: "rgba(250,248,243,0.35)", marginTop: "8px" }}>{c.note}</div>
-                  <div style={{ position: "absolute", bottom: 0, left: 0, height: "2px", width: c.pct, maxWidth: "100%", background: `linear-gradient(90deg, ${GOLD}, transparent)`, opacity: 0.5 }} />
-                </div>
-              ))}
+                  <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
+                    <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: "linear-gradient(90deg, #7A5C0A 0%, #C9A84C 50%, #F5D98B 100%)", transition: "width 0.7s ease" }} />
+                    </div>
+                    <div style={{
+                      fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
+                      background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+                      WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                    }}>
+                      {dailyPct}%
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {(() => {
+                const dailyRow = spendRows.find((r) => r.label === "Daily");
+                if (!dailyRow || !dailyRow.data) return null;
+                const { out, allowance, diff } = dailyRow.data;
+                const over = diff > 0;
+                return (
+                  <section className="sa-balance-section" style={{
+                    flex: "1 1 260px", textAlign: "center", padding: "26px 20px",
+                    border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                    background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                    minHeight: "190px", boxSizing: "border-box",
+                    display: "flex", flexDirection: "column", justifyContent: "center",
+                  }}>
+                    <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
+                      Daily Spending
+                      {dailyRow.sub && (
+                        <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                          {dailyRow.sub}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{
+                      fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                      ...(over
+                        ? { color: "#C0392B" }
+                        : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                    }}>
+                      {fmt(Math.round(out))} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(Math.round(allowance))} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                    </div>
+                    <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
+                      <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${allowance > 0 ? Math.min(100, Math.round((out / allowance) * 100)) : 0}%`, background: over ? "linear-gradient(90deg, #8B2E22, #C0392B)" : "linear-gradient(90deg, #7A5C0A 0%, #C9A84C 50%, #F5D98B 100%)", transition: "width 0.7s ease" }} />
+                      </div>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
+                        ...(over
+                          ? { color: "#C0392B" }
+                          : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                      }}>
+                        {dailyRow.showPct != null
+                          ? `${dailyRow.showPct}%`
+                          : <>{over ? "−" : ""}{fmt(Math.abs(Math.round(diff)))} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span></>
+                        }
+                      </div>
+                    </div>
+                  </section>
+                );
+              })()}
             </div>
 
+            {/* Weekly Sadaqah — 10% of net Trading income (In − Out), Friday-only checkable */}
+            {(() => {
+              const sadaqahTxs = txs.filter((t) => t.type === "out" && t.incomeType === "Sadaqah");
+              const lastSadaqahDate = sadaqahTxs.length
+                ? sadaqahTxs.reduce((max, t) => (t.date > max ? t.date : max), sadaqahTxs[0].date)
+                : null;
+              const inWindow = txs.filter((t) => t.incomeType === "Trading" && (!lastSadaqahDate || t.date > lastSadaqahDate));
+              const tradingIn = inWindow.filter((t) => t.type === "in").reduce((s, t) => s + t.amount, 0);
+              const tradingOut = inWindow.filter((t) => t.type === "out").reduce((s, t) => s + t.amount, 0);
+              const sadaqahDue = Math.max(0, (tradingIn - tradingOut) * 0.10);
+              const today = todayKey();
+              const isFriday = new Date().getDay() === 5;
+              const paidToday = sadaqahTxs.some((t) => t.date === today);
+
+              const toggleSadaqah = () => {
+                if (!isFriday) return;
+                if (paidToday) {
+                  setFin((p) => ({ ...p, txs: p.txs.filter((t) => !(t.type === "out" && t.incomeType === "Sadaqah" && t.date === today)) }));
+                } else {
+                  if (sadaqahDue <= 0) return;
+                  const tx = {
+                    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+                    type: "out", amount: Math.round(sadaqahDue * 100) / 100,
+                    comment: "Weekly Sadaqah",
+                    incomeType: "Sadaqah",
+                    date: today,
+                    ts: Date.now(),
+                  };
+                  setFin((p) => ({ ...p, txs: [tx, ...p.txs] }));
+                }
+              };
+
+              return (
+                <section
+                  className="sa-balance-section"
+                  onClick={toggleSadaqah}
+                  style={{
+                    textAlign: "center", padding: "20px 20px", marginBottom: "22px",
+                    border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                    background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                    boxSizing: "border-box",
+                    cursor: isFriday ? "pointer" : "default",
+                    opacity: isFriday || paidToday ? 1 : 0.75,
+                  }}
+                  title={isFriday ? (paidToday ? "Undo this week's Sadaqah" : "Mark Sadaqah as paid") : "Only checkable on Fridays"}
+                >
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: paidToday ? "#3CB371" : "rgba(201,168,76,0.65)", marginBottom: "2px" }}>
+                    Weekly Sadaqah
+                  </div>
+                  <div style={{
+                    fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                    ...(paidToday
+                      ? { color: "#3CB371" }
+                      : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                  }}>
+                    {fmt(Math.round(sadaqahDue))} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: paidToday ? "rgba(60,179,113,0.7)" : "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                  </div>
+                </section>
+              );
+            })()}
+
+            {/* Spending — over/under the 20% allowance */}
+            <section className="sa-balance-section" style={{
+              textAlign: "center", padding: "26px 20px", marginBottom: "22px",
+              border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+              background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+              minHeight: "190px", boxSizing: "border-box",
+              display: "flex", flexDirection: "column", justifyContent: "center",
+            }}>
+              <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "18px" }}>
+                Spending
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "18px" }}>
+                {spendRows.map((r) => {
+                  if (!r.data) return null;
+                  const { out, allowance, diff } = r.data;
+                  const over = diff > 0;
+                  return (
+                    <div key={r.label} style={{ textAlign: "center" }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)", marginBottom: "6px", lineHeight: 1.3 }}>
+                        {r.label}
+                        {r.sub && (
+                          <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "9px", color: "rgba(201,168,76,0.4)" }}>
+                            {r.sub}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 600,
+                        ...(over
+                          ? { color: "#C0392B" }
+                          : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                      }}>
+                        {fmt(Math.round(out))} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(Math.round(allowance))} <span style={{ fontSize: "10px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                      </div>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "12px", fontWeight: 600, marginTop: "4px",
+                        ...(over
+                          ? { color: "#C0392B" }
+                          : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
+                      }}>
+                        {r.showPct != null
+                          ? `${r.showPct}%`
+                          : <>{over ? "−" : ""}{fmt(Math.abs(Math.round(diff)))} <span style={{ fontSize: "9px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span></>
+                        }
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
             {/* Period indicators */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "14px", marginBottom: "26px" }}>
+            <div className="sa-period-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "14px", marginBottom: "26px" }}>
               <PeriodChip label="Daily" {...pToday} />
               <PeriodChip label="Last 7 Days" {...p7} />
               <PeriodChip label="This Month" {...pMonth} />
@@ -407,7 +1479,7 @@ export default function App() {
             </div>
 
             {/* Flow chart */}
-            <section style={{ border: "1px solid rgba(201,168,76,0.18)", borderRadius: "1px", padding: "22px 22px 14px" }}>
+            <section className="sa-flow-section" style={{ border: "1px solid rgba(201,168,76,0.18)", borderRadius: "1px", padding: "22px 22px 14px" }}>
               <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11.5px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "18px" }}>
                 Net Flow — Last 14 Days
               </div>
@@ -416,26 +1488,204 @@ export default function App() {
           </div>
         )}
 
+        {/* ═══════════ THE PLAN ═══════════ */}
+        {tab === "plan" && (
+          <div style={{ animation: "saFadeUp 0.45s ease" }}>
+
+            {!planSummary ? (
+              <div style={{ textAlign: "center", padding: "60px 20px", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "16px", color: "rgba(250,248,243,0.3)" }}>
+                No plan published yet — open Special Ashraf Finances in The Process (main app) once to sync this month's target.
+              </div>
+            ) : (() => {
+              const achieved = period((t) => t.date.startsWith(monthKey())).net;
+              const pct = planSummary.target > 0 ? Math.round((achieved / planSummary.target) * 100) : 0;
+              const pctColor = pct >= 100 ? GOLD_LIGHT : pct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
+              return (
+                <>
+                  <div className="sa-plan-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "22px" }}>
+                    <div className="sa-plan-card" style={{
+                      position: "relative",
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "22px 22px 18px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                    }}>
+                      <button onClick={refreshFromMainApp} disabled={refreshingPlan} aria-label="Refresh from Main App" style={{
+                        position: "absolute", top: "10px", right: "10px",
+                        background: "none", border: "none", padding: "4px",
+                        cursor: refreshingPlan ? "default" : "pointer", color: GOLD, fontSize: "16px", lineHeight: 1,
+                        opacity: refreshingPlan ? 0.5 : 1,
+                      }}>↻</button>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "10px" }}>This Month Target</div>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "28px", fontWeight: 600,
+                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      }}>
+                        {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                      </div>
+                    </div>
+                    <div className="sa-plan-card" style={{
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px", padding: "22px 22px 18px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                    }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "10px" }}>This Month Needed</div>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "28px", fontWeight: 600,
+                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      }}>
+                        {fmt(planSummary.monthlyNeeded)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.6)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Daily Target InshaALLAH SWT */}
+                  {dailyTarget != null && (
+                    <section className="sa-balance-section" style={{
+                      textAlign: "center", padding: "26px 20px", marginBottom: "16px",
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                      minHeight: "190px", boxSizing: "border-box",
+                      display: "flex", flexDirection: "column", justifyContent: "center",
+                    }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
+                        Daily Target InshaALLAH SWT
+                        <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                          {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                          {tomorrowTarget != null && (
+                            <span style={{ color: "rgba(201,168,76,0.4)" }}> · tomorrow {fmt(tomorrowTarget)} {CURRENCY}</span>
+                          )}
+                        </span>
+                      </div>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      }}>
+                        {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                      </div>
+                      <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
+                        <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: "linear-gradient(90deg, #7A5C0A 0%, #C9A84C 50%, #F5D98B 100%)", transition: "width 0.7s ease" }} />
+                        </div>
+                        <div style={{
+                      fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
+                      background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+                      WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                    }}>
+                          {dailyPct}%
+                        </div>
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Monthly Target */}
+                  {planSummary && planSummary.target != null && (
+                    <section className="sa-balance-section" style={{
+                      textAlign: "center", padding: "26px 20px", marginBottom: "22px",
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                      minHeight: "190px", boxSizing: "border-box",
+                      display: "flex", flexDirection: "column", justifyContent: "center",
+                    }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
+                        Monthly Target
+                        <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                          {new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })} <span style={{ color: "rgba(201,168,76,0.4)" }}>(-{workingDaysLeft})</span>
+                        </span>
+                      </div>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      }}>
+                        {fmt(pMonth.net)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                      </div>
+                      <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
+                        <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.min(100, monthlyPct)}%`, background: `linear-gradient(90deg, ${GOLD}, ${GOLD_LIGHT})`, transition: "width 0.7s ease" }} />
+                        </div>
+                        <div style={{
+                          fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
+                          background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                        }}>
+                          {monthlyPct}%
+                        </div>
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Yearly Target */}
+                  {planSummary && planSummary.yearSurplusTarget != null && (
+                    <section className="sa-balance-section" style={{
+                      textAlign: "center", padding: "26px 20px", marginBottom: "22px",
+                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                      minHeight: "190px", boxSizing: "border-box",
+                      display: "flex", flexDirection: "column", justifyContent: "center",
+                    }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "18px", lineHeight: 1.3 }}>
+                        Yearly Target
+                        <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                          {planSummary.yearRangeLabel}
+                        </span>
+                      </div>
+                      <div className="sa-yearly-split" style={{ display: "flex", justifyContent: "center", gap: "28px", flexWrap: "wrap" }}>
+                        <div style={{ textAlign: "center", flex: "1 1 160px" }}>
+                          <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)", marginBottom: "6px" }}>
+                            Target to Earn
+                          </div>
+                          <div style={{
+                            fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600,
+                            background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                          }}>
+                            {fmt(yearInAmt)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(planSummary.yearSurplusTarget)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                          </div>
+                          <div style={{
+                            fontFamily: "'Playfair Display', serif", fontSize: "13px", fontWeight: 600, marginTop: "6px",
+                            background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                          }}>{yearSurplusPct}%</div>
+                        </div>
+                        <div className="sa-yearly-divider" style={{ width: "1px", background: "rgba(201,168,76,0.2)" }} />
+                        <div style={{ textAlign: "center", flex: "1 1 160px" }}>
+                          <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px", color: "rgba(201,168,76,0.55)", marginBottom: "6px" }}>
+                            Target Balance
+                          </div>
+                          <div style={{
+                            fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600,
+                            background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                          }}>
+                            {fmt(balance)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(planSummary.yearEndBalanceTarget)} <span style={{ fontSize: "11px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                          </div>
+                          <div style={{
+                            fontFamily: "'Playfair Display', serif", fontSize: "13px", fontWeight: 600, marginTop: "6px",
+                            background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                          }}>{yearBalancePct}%</div>
+                        </div>
+                      </div>
+                    </section>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
+
         {/* ═══════════ TRACKING ═══════════ */}
         {tab === "tracking" && (
           <div style={{ animation: "saFadeUp 0.45s ease" }}>
 
             {/* Entry form */}
-            <section style={{
+            <section className="sa-form-section" style={{
               border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px", padding: "26px 26px 24px", marginBottom: "34px",
               background: "radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.06) 0%, transparent 70%)",
             }}>
               <div style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.3em", textTransform: "uppercase", color: "rgba(201,168,76,0.8)", marginBottom: "20px" }}>Record Movement</div>
 
-              <FlowToggle value={flow} onChange={setFlow} />
+              <FlowToggle value={flow} onChange={(v) => { setFlow(v); setIncomeType(""); setTxTypeAttempted(false); }} />
 
-              <div style={{ display: "flex", gap: "12px", marginTop: "16px", flexWrap: "wrap" }}>
+              <div className="sa-form-row" style={{ display: "flex", gap: "12px", marginTop: "16px", flexWrap: "wrap" }}>
                 <div style={{ flex: "0 0 180px", minWidth: "150px" }}>
                   <input
                     type="number" inputMode="decimal" value={amount}
                     onChange={(e) => setAmount(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && addTx()}
-                    placeholder="Amount"
+                    placeholder="$"
                     style={{
                       width: "100%", padding: "14px 16px", background: "rgba(250,248,243,0.03)",
                       border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px",
@@ -448,7 +1698,7 @@ export default function App() {
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && addTx()}
-                    placeholder="Comment — where from, where to…"
+                    placeholder="Comment"
                     style={{
                       width: "100%", padding: "14px 16px", background: "rgba(250,248,243,0.03)",
                       border: "1px solid rgba(201,168,76,0.18)", borderRadius: "1px",
@@ -456,28 +1706,47 @@ export default function App() {
                     }}
                   />
                 </div>
-              </div>
-
-              {flow === "out" && (
-                <div style={{ marginTop: "12px" }}>
-                  <select
-                    value={linkedGoal}
-                    onChange={(e) => setLinkedGoal(e.target.value)}
-                    style={{
-                      width: "100%", padding: "12px 14px", background: "rgba(250,248,243,0.03)",
-                      border: "1px solid rgba(201,168,76,0.18)", borderRadius: "1px",
-                      fontFamily: "'Cormorant', serif", fontStyle: linkedGoal ? "normal" : "italic",
-                      fontSize: "14px", color: linkedGoal ? CREAM : "rgba(250,248,243,0.4)",
-                      appearance: "none", cursor: "pointer",
-                    }}
-                  >
-                    <option value="" style={{ background: INK, fontStyle: "italic" }}>Link to a 2026 Goal (optional)</option>
-                    {LINKABLE_2026_GOALS.map((g) => (
-                      <option key={g} value={g} style={{ background: INK, fontStyle: "normal" }}>{g}</option>
-                    ))}
-                  </select>
+                <div style={{ flex: "0 0 170px", minWidth: "150px" }}>
+                  {addingNewType ? (
+                    <input
+                      autoFocus
+                      value={newTypeDraft}
+                      onChange={(e) => setNewTypeDraft(e.target.value)}
+                      onBlur={commitNewType}
+                      onKeyDown={(e) => { if (e.key === "Enter") commitNewType(); if (e.key === "Escape") { setAddingNewType(false); setNewTypeDraft(""); } }}
+                      placeholder="New type name…"
+                      style={{
+                        width: "100%", padding: "14px 14px", background: "rgba(250,248,243,0.03)",
+                        border: "1px solid rgba(201,168,76,0.4)", borderRadius: "1px",
+                        fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "14px", color: CREAM,
+                      }}
+                    />
+                  ) : (
+                    <select
+                      value={incomeType}
+                      onChange={(e) => {
+                        if (e.target.value === "__add_new__") { setAddingNewType(true); return; }
+                        setIncomeType(e.target.value);
+                        setTxTypeAttempted(false);
+                      }}
+                      style={{
+                        width: "100%", padding: "14px 14px", background: "rgba(250,248,243,0.03)",
+                        border: `1px solid ${txTypeAttempted && !incomeType ? "#C0392B" : "rgba(201,168,76,0.18)"}`,
+                        borderRadius: "1px",
+                        fontFamily: "'Cormorant', serif", fontStyle: incomeType ? "normal" : "italic",
+                        fontSize: "14px", color: incomeType ? CREAM : (txTypeAttempted ? "#E88" : "rgba(250,248,243,0.4)"),
+                        appearance: "none", cursor: "pointer",
+                      }}
+                    >
+                      <option value="" style={{ background: INK, fontStyle: "italic" }}>Type *</option>
+                      {txTypes.map((t) => (
+                        <option key={t} value={t} style={{ background: INK, fontStyle: "normal" }}>{t}</option>
+                      ))}
+                      <option value="__add_new__" style={{ background: INK, fontStyle: "italic", color: GOLD }}>+ Add new type…</option>
+                    </select>
+                  )}
                 </div>
-              )}
+              </div>
 
               <button onClick={addTx} style={{
                 marginTop: "16px", width: "100%", padding: "15px", cursor: "pointer",
@@ -491,23 +1760,196 @@ export default function App() {
               </button>
             </section>
 
+            {/* Search + Sort */}
+            <div className="sa-filter-row" style={{ display: "flex", gap: "8px", marginBottom: "12px", alignItems: "center", position: "relative" }}>
+              <button className="sa-icon-btn" onClick={() => setDatePanelOpen((v) => !v)} title={dateFilterSummary || "All Dates"} style={{
+                flexShrink: 0, width: "38px", height: "38px",
+                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+                background: dateFilterSummary ? "rgba(201,168,76,0.12)" : "rgba(250,248,243,0.03)",
+                border: `1px solid ${dateFilterSummary ? "rgba(201,168,76,0.5)" : "rgba(201,168,76,0.18)"}`,
+                borderRadius: "1px", fontSize: "15px",
+              }}>
+                📅
+              </button>
+              {dateFilterSummary && (
+                <button className="sa-icon-btn" onClick={() => { setFilterYear(""); setFilterMonth(""); setFilterDay(""); }} title="Clear date filter" style={{
+                  flexShrink: 0, width: "26px", height: "38px",
+                  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+                  background: "transparent", border: "none",
+                  color: "rgba(250,248,243,0.4)", fontSize: "13px",
+                }}>✕</button>
+              )}
+              <button className="sa-icon-btn" onClick={() => setSortPanelOpen((v) => !v)} title="Sort" style={{
+                flexShrink: 0, width: "38px", height: "38px",
+                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+                background: sortPanelOpen ? "rgba(201,168,76,0.12)" : "rgba(250,248,243,0.03)",
+                border: `1px solid ${sortPanelOpen ? "rgba(201,168,76,0.5)" : "rgba(201,168,76,0.18)"}`,
+                borderRadius: "1px", fontSize: "15px", color: GOLD,
+              }}>
+                ⇅
+              </button>
+              <div className="sa-flow-filter-group" style={{ display: "flex", gap: "4px", minWidth: 0 }}>
+                {[["all", "All"], ["in", "Money In"], ["out", "Money Out"]].map(([id, label]) => {
+                  const active = flowFilter === id;
+                  return (
+                    <button key={id} className="sa-flow-filter-btn" onClick={() => setFlowFilter(id)} style={{
+                      padding: "10px 14px", cursor: "pointer",
+                      background: active ? "rgba(201,168,76,0.12)" : "transparent",
+                      border: `1px solid ${active ? "rgba(201,168,76,0.5)" : "rgba(201,168,76,0.18)"}`,
+                      borderRadius: "1px",
+                      fontFamily: "'Cormorant', serif", fontSize: "12.5px", letterSpacing: "0.06em", textTransform: "uppercase",
+                      color: active ? GOLD_LIGHT : "rgba(250,248,243,0.4)",
+                      transition: "all 0.2s ease", whiteSpace: "nowrap",
+                    }}>{label}</button>
+                  );
+                })}
+              </div>
+
+              {sortPanelOpen && (
+                <div style={{
+                  position: "absolute", top: "calc(100% + 8px)", left: "84px", zIndex: 20,
+                  minWidth: "210px", padding: "8px",
+                  background: INK, border: "1px solid rgba(201,168,76,0.35)", borderRadius: "1px",
+                  boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+                  display: "flex", flexDirection: "column", gap: "4px",
+                }}>
+                  {[
+                    ["newest", "Newest First"],
+                    ["oldest", "Oldest First"],
+                    ["amount_high", "Amount: High → Low"],
+                    ["amount_low", "Amount: Low → High"],
+                  ].map(([id, label]) => (
+                    <button key={id} onClick={() => { setSortBy(id); setSortPanelOpen(false); }} style={{
+                      padding: "9px 12px", textAlign: "left", cursor: "pointer",
+                      background: sortBy === id ? "rgba(201,168,76,0.14)" : "transparent",
+                      border: `1px solid ${sortBy === id ? GOLD : "transparent"}`,
+                      borderRadius: "1px",
+                      fontFamily: "'Cormorant', serif", fontSize: "13px", letterSpacing: "0.06em", textTransform: "uppercase",
+                      color: sortBy === id ? GOLD_LIGHT : "rgba(250,248,243,0.55)",
+                    }}>{label}</button>
+                  ))}
+                </div>
+              )}
+
+              {datePanelOpen && (
+                <div style={{
+                  position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 20,
+                  width: "min(340px, 90vw)", padding: "18px",
+                  background: INK, border: "1px solid rgba(201,168,76,0.35)", borderRadius: "1px",
+                  boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+                }}>
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.6)", marginBottom: "10px" }}>Year</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "18px" }}>
+                    {availableYears.map((y) => (
+                      <button key={y} onClick={() => setFilterYear(filterYear === y ? "" : y)} style={{
+                        padding: "6px 12px", cursor: "pointer",
+                        background: filterYear === y ? "rgba(201,168,76,0.18)" : "transparent",
+                        border: `1px solid ${filterYear === y ? GOLD : "rgba(201,168,76,0.2)"}`,
+                        borderRadius: "1px", fontFamily: "'Playfair Display', serif", fontSize: "13px",
+                        color: filterYear === y ? GOLD_LIGHT : "rgba(250,248,243,0.55)",
+                      }}>{y}</button>
+                    ))}
+                  </div>
+
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.6)", marginBottom: "10px" }}>Month</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px", marginBottom: "18px" }}>
+                    {MONTH_NAMES.map((name, i) => {
+                      const mm = String(i + 1).padStart(2, "0");
+                      const active = filterMonth === mm;
+                      return (
+                        <button key={mm} onClick={() => { setFilterMonth(active ? "" : mm); if (active) setFilterDay(""); }} style={{
+                          padding: "8px 4px", cursor: "pointer",
+                          background: active ? "rgba(201,168,76,0.18)" : "transparent",
+                          border: `1px solid ${active ? GOLD : "rgba(201,168,76,0.2)"}`,
+                          borderRadius: "1px", fontFamily: "'Cormorant', serif", fontSize: "13px",
+                          color: active ? GOLD_LIGHT : "rgba(250,248,243,0.55)",
+                        }}>{name}</button>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.6)", marginBottom: "10px" }}>Day</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "5px", marginBottom: "18px" }}>
+                    {Array.from({ length: daysInSelectedMonth }, (_, i) => i + 1).map((d) => {
+                      const dd = String(d).padStart(2, "0");
+                      const active = filterDay === dd;
+                      return (
+                        <button key={dd} onClick={() => setFilterDay(active ? "" : dd)} style={{
+                          padding: "6px 0", cursor: "pointer",
+                          background: active ? "rgba(201,168,76,0.18)" : "transparent",
+                          border: `1px solid ${active ? GOLD : "rgba(201,168,76,0.15)"}`,
+                          borderRadius: "1px", fontFamily: "'Cormorant', serif", fontSize: "12px",
+                          color: active ? GOLD_LIGHT : "rgba(250,248,243,0.5)",
+                        }}>{d}</button>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "10px" }}>
+                    <button onClick={() => { setFilterYear(""); setFilterMonth(""); setFilterDay(""); }} style={{
+                      padding: "8px 16px", background: "none", border: "1px solid rgba(201,168,76,0.25)", borderRadius: "1px",
+                      cursor: "pointer", fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.1em",
+                      textTransform: "uppercase", color: "rgba(250,248,243,0.45)",
+                    }}>Clear All</button>
+                    <button onClick={() => setDatePanelOpen(false)} style={{
+                      padding: "8px 20px", background: "rgba(201,168,76,0.14)", border: `1px solid ${GOLD}`, borderRadius: "1px",
+                      cursor: "pointer", fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.1em",
+                      textTransform: "uppercase", color: GOLD_LIGHT,
+                    }}>Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Ledger */}
-            {grouped.length === 0 ? (
+            {sortedTxs.length === 0 ? (
               <div style={{ textAlign: "center", padding: "50px 20px", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "17px", color: "rgba(250,248,243,0.3)" }}>
-                No movements yet. Record the first one above.
+                {txs.length === 0 ? "No movements yet. Record the first one above." : "No movements match that search."}
+              </div>
+            ) : isAmountSort ? (
+              <div style={{ marginBottom: "28px" }}>
+                {sortedTxs.map((t) => (
+                  <div key={t.id} className="sa-ledger-row" style={{
+                    display: "flex", alignItems: "center", gap: "14px",
+                    padding: "13px 16px", marginBottom: "8px",
+                    border: `1px solid ${t.type === "in" ? "rgba(201,168,76,0.22)" : "rgba(250,248,243,0.1)"}`,
+                    borderRadius: "1px",
+                    background: t.type === "in" ? "linear-gradient(90deg, rgba(201,168,76,0.06), transparent 60%)" : "transparent",
+                  }}>
+                    <span style={{
+                      width: "7px", height: "7px", flexShrink: 0, transform: "rotate(45deg)",
+                      background: t.type === "in" ? GOLD : "transparent",
+                      border: `1.5px solid ${t.type === "in" ? GOLD : "rgba(250,248,243,0.4)"}`,
+                    }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "16px", color: CREAM, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {t.comment || <span style={{ fontStyle: "italic", color: "rgba(250,248,243,0.3)" }}>No comment</span>}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.12em", color: "rgba(250,248,243,0.3)" }}>
+                          {dateLabel(t.date)} · {new Date(t.ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="sa-ledger-amt" style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: t.type === "in" ? GOLD_LIGHT : "rgba(250,248,243,0.75)", whiteSpace: "nowrap" }}>
+                      {t.type === "in" ? "+" : "−"}{fmt(t.amount)}
+                    </div>
+                    <button onClick={() => deleteTx(t.id)} title="Delete" style={{
+                      background: "transparent", border: "none", cursor: "pointer",
+                      color: "rgba(250,248,243,0.25)", fontSize: "16px", padding: "4px 6px",
+                      fontFamily: "'Cormorant', serif", transition: "color 0.2s",
+                    }}
+                      onMouseEnter={(e) => e.currentTarget.style.color = "rgba(201,168,76,0.9)"}
+                      onMouseLeave={(e) => e.currentTarget.style.color = "rgba(250,248,243,0.25)"}
+                    >×</button>
+                  </div>
+                ))}
               </div>
             ) : grouped.map(([date, list]) => {
-              const dayNet = list.reduce((a, t) => a + (t.type === "in" ? t.amount : -t.amount), 0);
               return (
                 <div key={date} style={{ marginBottom: "28px" }}>
-                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px", paddingBottom: "8px", borderBottom: "1px solid rgba(201,168,76,0.15)" }}>
-                    <span style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px", fontWeight: 500, letterSpacing: "0.06em", color: "rgba(201,168,76,0.9)" }}>{dateLabel(date)}</span>
-                    <span style={{ fontFamily: "'Cormorant', serif", fontSize: "14px", color: dayNet >= 0 ? "rgba(201,168,76,0.8)" : "rgba(250,248,243,0.5)" }}>
-                      {dayNet > 0 ? "+" : ""}{fmt(dayNet)} {CURRENCY}
-                    </span>
-                  </div>
                   {list.map((t) => (
-                    <div key={t.id} style={{
+                    <div key={t.id} className="sa-ledger-row" style={{
                       display: "flex", alignItems: "center", gap: "14px",
                       padding: "13px 16px", marginBottom: "8px",
                       border: `1px solid ${t.type === "in" ? "rgba(201,168,76,0.22)" : "rgba(250,248,243,0.1)"}`,
@@ -527,17 +1969,16 @@ export default function App() {
                           <span style={{ fontFamily: "'Cormorant', serif", fontSize: "12px", letterSpacing: "0.12em", color: "rgba(250,248,243,0.3)" }}>
                             {new Date(t.ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
                           </span>
-                          {t.linkedGoal && (
+                          {t.incomeType && (
                             <span style={{
                               fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11px",
                               color: GOLD, border: `1px solid rgba(201,168,76,0.35)`, borderRadius: "1px",
-                              padding: "1px 8px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                              maxWidth: "220px",
-                            }}>◆ {t.linkedGoal}</span>
+                              padding: "1px 8px", whiteSpace: "nowrap",
+                            }}>◆ {t.incomeType}</span>
                           )}
                         </div>
                       </div>
-                      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: t.type === "in" ? GOLD_LIGHT : "rgba(250,248,243,0.75)", whiteSpace: "nowrap" }}>
+                      <div className="sa-ledger-amt" style={{ fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 600, color: t.type === "in" ? GOLD_LIGHT : "rgba(250,248,243,0.75)", whiteSpace: "nowrap" }}>
                         {t.type === "in" ? "+" : "−"}{fmt(t.amount)}
                       </div>
                       <button onClick={() => deleteTx(t.id)} title="Delete" style={{
@@ -555,6 +1996,8 @@ export default function App() {
             })}
           </div>
         )}
+
+        {tab === "trading" && <TradingTab fin={fin} setFin={setFin} capital={capital} planSummary={planSummary} dailyTarget={dailyTarget} yearInAmt={yearInAmt} />}
       </div>
     </div>
   );
