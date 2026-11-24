@@ -933,45 +933,38 @@ export default function App() {
   const yearSurplusColor = yearSurplusPct >= 100 ? GOLD_LIGHT : yearSurplusPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
   const yearBalanceColor = yearBalancePct >= 100 ? GOLD_LIGHT : yearBalancePct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
 
-  // ── Spending — living money only (trading losses and Sadaqah are not spending) ──
-  // The budget comes from the plan: Cash Flow's monthly needed for living (not fees, not the age budget).
-  // The spending "day" runs 6am → 6am: anything logged between midnight and 5:59am belongs to the previous day.
-  const spendingDayKey = (() => {
-    const now = new Date();
-    if (now.getHours() < 6) now.setDate(now.getDate() - 1);
-    return now.toISOString().slice(0, 10);
-  })();
-  const isTodaySpending = (t) => {
-    if (!t.ts) return t.date === spendingDayKey;
-    const d = new Date(t.ts);
-    if (d.getHours() < 6) d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10) === spendingDayKey;
-  };
+  // ── Spending — what Ashraf is free to spend = Special Ashraf Lifestyle (main app → Lifestyle by Age) ──
+  // Not Needed: that also carries parents' programs, challenge fees, budgets. Trading losses and Sadaqah aren't spending.
+  // Day and month reset at midnight.
+  const spendingDayKey = todayKey();
+  const isTodaySpending = (t) => t.date === spendingDayKey;
   const isLiving = (t) => t.type === "out" && t.incomeType !== "Trading" && t.incomeType !== "Sadaqah";
   const livingOut = (pred) => txs.reduce((a, t) => (isLiving(t) && pred(t) ? a + t.amount : a), 0);
-  const living = planSummary?.livingByMonth || null; // { "2026-11": MAD, … } up to this month
+  const living = planSummary?.lifestyleByMonth || null; // { "2026-11": MAD, … } every month of the plan
   const livingSum = (pred) => (living ? Object.entries(living).reduce((a, [k, v]) => (pred(k) ? a + v : a), 0) : null);
   const spendMonthKey = spendingDayKey.slice(0, 7);
-  const monthLiving = planSummary?.monthlyLiving != null ? planSummary.monthlyLiving : null;
+  const monthLiving = living ? (living[spendMonthKey] || 0) : null;
 
-  // Daily Spending = what's left of this month's living budget ÷ the days left (today included).
-  // Frozen for the day: today's spending doesn't change today's allowance, only tomorrow's.
+  // Daily = what's left of this month's budget ÷ the days left (today included).
+  // Today's own spending doesn't change today's amount — tomorrow's.
   const spendDaysLeft = (() => { const d = new Date(spendingDayKey + "T12:00:00"); return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() - d.getDate() + 1; })();
   const outToday = livingOut(isTodaySpending);
-  const outMonthBeforeToday = livingOut((t) => t.date && t.date.startsWith(spendMonthKey) && !isTodaySpending(t));
+  const outMonthBeforeToday = livingOut((t) => t.date && t.date.startsWith(spendMonthKey) && t.date < spendingDayKey);
   const dailyAllowance = monthLiving != null ? Math.max(0, monthLiving - outMonthBeforeToday) / spendDaysLeft : null;
 
   const firstPlanMonth = living ? Object.keys(living).sort()[0] : null;
+  const allTimeOut = living ? livingOut((t) => t.date && t.date.slice(0, 7) >= firstPlanMonth && t.date.slice(0, 7) <= spendMonthKey) : 0;
   const ageStart = planSummary?.yearRangeStartISO || null, ageEnd = planSummary?.yearRangeEndISO || null;
   const spendRows = [
     {
       label: "All Time",
       sub: firstPlanMonth ? `Since ${new Date(firstPlanMonth + "-01T12:00:00").toLocaleDateString("en-US", { month: "short", year: "numeric" })}` : "",
-      data: living ? (() => { const out = livingOut((t) => t.date && t.date.slice(0, 7) >= firstPlanMonth); const allowance = livingSum(() => true); return { out, allowance, diff: out - allowance }; })() : null,
+      data: living ? (() => { const allowance = livingSum((k) => k <= spendMonthKey); return { out: allTimeOut, allowance, diff: allTimeOut - allowance }; })() : null,
     },
     {
-      label: "This Age",
+      label: "Yearly",
       sub: planSummary?.yearRangeLabel || "",
+      // the whole age (July → June): every month's Lifestyle budget summed
       data: living && ageStart ? (() => { const out = livingOut((t) => t.date >= ageStart && t.date < ageEnd); const allowance = livingSum((k) => k >= ageStart.slice(0, 7) && k < ageEnd.slice(0, 7)); return { out, allowance, diff: out - allowance }; })() : null,
     },
     {
@@ -1198,17 +1191,6 @@ export default function App() {
               </div>
               <div style={{ fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "15px", letterSpacing: "0.2em", color: "rgba(201,168,76,0.7)", marginTop: "10px" }}>{CURRENCY}</div>
 
-              {/* Invested / To Spend */}
-              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "28px", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid rgba(201,168,76,0.15)" }}>
-                <div style={{ textAlign: "center", flex: 1 }}>
-                  <div style={{
-                    fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 700, lineHeight: 1.3,
-                    ...(paceInfo ? paceInfo.style : { color: "rgba(201,168,76,0.4)" }),
-                  }}>
-                    {paceInfo ? paceInfo.label : "—"}
-                  </div>
-                </div>
-              </div>
             </section>
 
             {/* Daily Target InshaALLAH SWT + Daily Spending — side by side */}
