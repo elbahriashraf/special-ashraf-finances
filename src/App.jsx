@@ -917,19 +917,7 @@ export default function App() {
   const yearBalancePct = planSummary && planSummary.yearEndBalanceTarget > 0
     ? Math.round((balance / planSummary.yearEndBalanceTarget) * 100) : 0;
 
-  // Pace — Actual Balance vs. this month's Starting Bal., translated into a
-  // plain-language status instead of a raw percentage.
-  const pacePct = planSummary?.startingBalance > 0 ? Math.round((balance / planSummary.startingBalance) * 100) : null; // plan below 0 (debt) → no pace
   const GOLD_TEXT_STYLE = { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" };
-  const paceInfo = pacePct == null ? null
-    : pacePct > 120 ? { label: "Plays Aggressive", style: { color: "#C0392B" } }
-    : pacePct >= 95 ? { label: "Plays Great", style: GOLD_TEXT_STYLE }
-    : pacePct >= 90 ? { label: "Plays Good", style: GOLD_TEXT_STYLE }
-    : pacePct >= 85 ? { label: "Must Get Better", style: { color: "#D98E34" } }
-    : { label: "Playing Bad, Fix The Situation", style: { color: "#C0392B" } };
-  // Published so the companion app's Essentials section can show this
-  // same number without recomputing balance/plan logic itself.
-  useEffect(() => { cloudSave("sa_finance_pace", pacePct); }, [pacePct]);
   const yearSurplusColor = yearSurplusPct >= 100 ? GOLD_LIGHT : yearSurplusPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
   const yearBalanceColor = yearBalancePct >= 100 ? GOLD_LIGHT : yearBalancePct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
 
