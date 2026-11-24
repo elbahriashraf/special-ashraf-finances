@@ -927,6 +927,9 @@ export default function App() {
     : pacePct >= 90 ? { label: "Plays Good", style: GOLD_TEXT_STYLE }
     : pacePct >= 85 ? { label: "Must Get Better", style: { color: "#D98E34" } }
     : { label: "Playing Bad, Fix The Situation", style: { color: "#C0392B" } };
+  // Published so the companion app's Essentials section can show this
+  // same number without recomputing balance/plan logic itself.
+  useEffect(() => { cloudSave("sa_finance_pace", pacePct); }, [pacePct]);
   const yearSurplusColor = yearSurplusPct >= 100 ? GOLD_LIGHT : yearSurplusPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
   const yearBalanceColor = yearBalancePct >= 100 ? GOLD_LIGHT : yearBalancePct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
 
