@@ -889,45 +889,28 @@ export default function App() {
     return count;
   })();
 
-  // ── Daily Target InshaALLAH SWT ──
-  // (This Month Target − money already made this month, NOT counting today)
-  // ÷ real workdays left this month (Mon–Fri only, weekends excluded) — not
-  // a flat 20, so the target genuinely tightens as the month's real
-  // remaining business days shrink. Frozen for the whole calendar day —
-  // today's own earnings don't move the target mid-day, they only move the
-  // "done today" side of the ratio below. Naturally flips at midnight since
-  // it's keyed off tk/mk (and workingDaysLeft recomputes from the real date).
-  const achievedBeforeToday = period((t) => t.date.startsWith(mk) && t.date !== tk).net;
-  const dailyTarget = planSummary && planSummary.target != null && workingDaysLeft > 0
-    ? Math.max(0, (planSummary.target - achievedBeforeToday) / workingDaysLeft)
-    : null;
+  // ── Trading only for now: what trading made (Trading in − Trading out) ──
+  const isTradingTx = (t) => t.incomeType === "Trading";
+  const tradingNet = (pred) => txs.reduce((a, t) => (isTradingTx(t) && pred(t) ? a + (t.type === "in" ? t.amount : -t.amount) : a), 0);
+  const tradingMonth = tradingNet((t) => t.date && t.date.startsWith(mk));
 
-  const doneTodayMAD = pToday.net;
-  const dailyPct = dailyTarget && dailyTarget > 0
-    ? Math.round((doneTodayMAD / dailyTarget) * 100)
-    : (doneTodayMAD > 0 ? 100 : 0);
-  const dailyPctColor = dailyPct <= 100 ? GOLD_LIGHT : "#C0392B";
-
-  // ── Tomorrow's target — same formula, but with today's earnings folded
-  // into "already made this month" once today is done, and one fewer
-  // workday remaining (tomorrow itself is excluded if it's a weekday, since
-  // by definition it's the day being targeted, not a day "left before it").
-  const workingDaysLeftAfterToday = Math.max(0, workingDaysLeft - (([0, 6].includes(new Date().getDay())) ? 0 : 1));
-  const tomorrowTarget = planSummary && planSummary.target != null && workingDaysLeftAfterToday > 0
-    ? Math.max(0, (planSummary.target - (achievedBeforeToday + doneTodayMAD)) / workingDaysLeftAfterToday)
-    : null;
+  // ── Actual Target — what is still left to make this month ──
+  // This Month Target − what trading already made this month. No daily quota:
+  // a good day can cover a week, a red day is paid back by the next ones.
+  const calDaysLeft = (() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth() + 1, 0).getDate() - n.getDate() + 1; })();
+  const actualTarget = planSummary && planSummary.target != null ? planSummary.target - tradingMonth : null; // < 0 = above target
+  const dailyTarget = null; // removed — kept as null for the Trading tab's Daily Profit (no daily quota)
 
   // ── Monthly Target — money earned this month vs This Month Target ──
   const monthlyPct = planSummary && planSummary.target > 0
-    ? Math.round((pMonth.net / planSummary.target) * 100)
+    ? Math.round((tradingMonth / planSummary.target) * 100)
     : 0;
   const monthlyPctColor = monthlyPct >= 100 ? GOLD_LIGHT : monthlyPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
 
   // ── Yearly Target — money in during the rolling "this age" window vs
   // Total Surplus target, and actual balance vs Balance-at-End-of-Age target.
   const yearInAmt = (planSummary && planSummary.yearRangeStartISO)
-    ? txs.filter((t) => t.type === "in" && t.date >= planSummary.yearRangeStartISO && t.date < planSummary.yearRangeEndISO)
-      .reduce((s, t) => s + t.amount, 0)
+    ? tradingNet((t) => t.date >= planSummary.yearRangeStartISO && t.date < planSummary.yearRangeEndISO)
     : 0;
   const yearSurplusPct = planSummary && planSummary.yearSurplusTarget > 0
     ? Math.round((yearInAmt / planSummary.yearSurplusTarget) * 100) : 0;
@@ -936,7 +919,7 @@ export default function App() {
 
   // Pace — Actual Balance vs. this month's Starting Bal., translated into a
   // plain-language status instead of a raw percentage.
-  const pacePct = planSummary?.startingBalance ? Math.round((balance / planSummary.startingBalance) * 100) : null;
+  const pacePct = planSummary?.startingBalance > 0 ? Math.round((balance / planSummary.startingBalance) * 100) : null; // plan below 0 (debt) → no pace
   const GOLD_TEXT_STYLE = { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" };
   const paceInfo = pacePct == null ? null
     : pacePct > 120 ? { label: "Plays Aggressive", style: { color: "#C0392B" } }
@@ -947,21 +930,9 @@ export default function App() {
   const yearSurplusColor = yearSurplusPct >= 100 ? GOLD_LIGHT : yearSurplusPct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
   const yearBalanceColor = yearBalancePct >= 100 ? GOLD_LIGHT : yearBalancePct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
 
-  // ── Spending vs the 20% "To Spend" allowance ──
-  // Shows money out against the allowance that period's earnings justify
-  // (money in × 20%), plus the raw difference underneath.
-  const spendFor = (pred) => {
-    const p = period(pred);
-    const allowance = p.inAmt * 0.20;
-    return { out: p.outAmt, allowance, diff: p.outAmt - allowance };
-  };
-
-  // ── Daily allowance ──
-  // This month's 20% allowance, capped at This Month Target, minus whatever
-  // has already gone out this month before today — i.e. what's genuinely
-  // left to spend today rather than a flat share.
-  // The spending "day" runs 6am → 6am, not midnight → midnight: anything
-  // logged between midnight and 5:59am still belongs to the previous day.
+  // ── Spending — living money only (trading losses and Sadaqah are not spending) ──
+  // The budget comes from the plan: Cash Flow's monthly needed for living (not fees, not the age budget).
+  // The spending "day" runs 6am → 6am: anything logged between midnight and 5:59am belongs to the previous day.
   const spendingDayKey = (() => {
     const now = new Date();
     if (now.getHours() < 6) now.setDate(now.getDate() - 1);
@@ -973,59 +944,43 @@ export default function App() {
     if (d.getHours() < 6) d.setDate(d.getDate() - 1);
     return d.toISOString().slice(0, 10) === spendingDayKey;
   };
+  const isLiving = (t) => t.type === "out" && t.incomeType !== "Trading" && t.incomeType !== "Sadaqah";
+  const livingOut = (pred) => txs.reduce((a, t) => (isLiving(t) && pred(t) ? a + t.amount : a), 0);
+  const living = planSummary?.livingByMonth || null; // { "2026-11": MAD, … } up to this month
+  const livingSum = (pred) => (living ? Object.entries(living).reduce((a, [k, v]) => (pred(k) ? a + v : a), 0) : null);
+  const spendMonthKey = spendingDayKey.slice(0, 7);
+  const monthLiving = planSummary?.monthlyLiving != null ? planSummary.monthlyLiving : null;
 
-  const monthIn = period((t) => t.date && t.date.startsWith(monthKey())).inAmt;
-  const monthAllowanceCapped = planSummary?.monthlyNeeded != null
-    ? Math.min(monthIn * 0.20, planSummary.monthlyNeeded)
-    : monthIn * 0.20; 3
-  const outThisMonthExceptToday = period((t) => t.date && t.date.startsWith(monthKey()) && !isTodaySpending(t)).outAmt;
-  const outToday = period(isTodaySpending).outAmt;
-  const dailyRemainingAllowance = monthAllowanceCapped - outThisMonthExceptToday;
-  const dailyPctOfMonthAllowance = monthAllowanceCapped > 0
-    ? Math.round((outToday / monthAllowanceCapped) * 100)
-    : 0;
+  // Daily Spending = what's left of this month's living budget ÷ the days left (today included).
+  // Frozen for the day: today's spending doesn't change today's allowance, only tomorrow's.
+  const spendDaysLeft = (() => { const d = new Date(spendingDayKey + "T12:00:00"); return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() - d.getDate() + 1; })();
+  const outToday = livingOut(isTodaySpending);
+  const outMonthBeforeToday = livingOut((t) => t.date && t.date.startsWith(spendMonthKey) && !isTodaySpending(t));
+  const dailyAllowance = monthLiving != null ? Math.max(0, monthLiving - outMonthBeforeToday) / spendDaysLeft : null;
+
+  const firstPlanMonth = living ? Object.keys(living).sort()[0] : null;
+  const ageStart = planSummary?.yearRangeStartISO || null, ageEnd = planSummary?.yearRangeEndISO || null;
   const spendRows = [
-    { label: "All Time", sub: "Special Ashraf Journey", data: spendFor(() => true) },
     {
-      label: "Yearly",
-      sub: String(new Date().getFullYear()),
-      // Resets every calendar year. Allowance is capped at This Month
-      // Needed × every month that's happened so far this year (Jan through
-      // the current month, inclusive) — not the raw 20%-of-earnings figure.
-      data: (() => {
-        const curYear = new Date().getFullYear();
-        const curMonth = new Date().getMonth() + 1; // 1-12
-        // The first year of tracking counts from whichever month real data
-        // actually starts (e.g. Aug 2026 = month 1, Sep 2026 = month 2, …).
-        // Every year after that is a full calendar year, so it counts from
-        // January like normal (Jan 2027 = month 1, Feb 2027 = month 2, …).
-        const firstTxDate = txs.length ? txs.reduce((min, t) => (t.date < min ? t.date : min), txs[0].date) : null;
-        const firstTxYear = firstTxDate ? parseInt(firstTxDate.slice(0, 4), 10) : curYear;
-        const firstTxMonth = firstTxDate ? parseInt(firstTxDate.slice(5, 7), 10) : curMonth;
-        const monthsElapsed = curYear === firstTxYear ? (curMonth - firstTxMonth + 1) : curMonth;
-
-        const pYear = period((t) => t.date && t.date.startsWith(String(curYear)));
-        const rawAllowance = pYear.inAmt * 0.20;
-        const cap = planSummary?.monthlyNeeded != null ? planSummary.monthlyNeeded * monthsElapsed : null;
-        const allowance = cap != null ? Math.min(rawAllowance, cap) : rawAllowance;
-        return { out: pYear.outAmt, allowance, diff: pYear.outAmt - allowance };
-      })(),
+      label: "All Time",
+      sub: firstPlanMonth ? `Since ${new Date(firstPlanMonth + "-01T12:00:00").toLocaleDateString("en-US", { month: "short", year: "numeric" })}` : "",
+      data: living ? (() => { const out = livingOut((t) => t.date && t.date.slice(0, 7) >= firstPlanMonth); const allowance = livingSum(() => true); return { out, allowance, diff: out - allowance }; })() : null,
+    },
+    {
+      label: "This Age",
+      sub: planSummary?.yearRangeLabel || "",
+      data: living && ageStart ? (() => { const out = livingOut((t) => t.date >= ageStart && t.date < ageEnd); const allowance = livingSum((k) => k >= ageStart.slice(0, 7) && k < ageEnd.slice(0, 7)); return { out, allowance, diff: out - allowance }; })() : null,
     },
     {
       label: "Monthly",
-      sub: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-      data: (() => {
-        const p = period((t) => t.date && t.date.startsWith(monthKey()));
-        const rawAllowance = p.inAmt * 0.20;
-        const allowance = planSummary?.monthlyNeeded != null ? Math.min(rawAllowance, planSummary.monthlyNeeded) : rawAllowance;
-        return { out: p.outAmt, allowance, diff: p.outAmt - allowance };
-      })(),
+      sub: new Date(spendingDayKey + "T12:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+      data: monthLiving != null ? (() => { const out = livingOut((t) => t.date && t.date.startsWith(spendMonthKey)); return { out, allowance: monthLiving, diff: out - monthLiving }; })() : null,
     },
     {
       label: "Daily",
       sub: new Date(spendingDayKey + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
-      data: { out: outToday, allowance: dailyRemainingAllowance, diff: outToday - dailyRemainingAllowance },
-      showPct: dailyPctOfMonthAllowance,
+      data: dailyAllowance != null ? { out: outToday, allowance: dailyAllowance, diff: outToday - dailyAllowance } : null,
+      showPct: dailyAllowance > 0 ? Math.round((outToday / dailyAllowance) * 100) : null,
     },
   ];
 
@@ -1255,43 +1210,43 @@ export default function App() {
 
             {/* Daily Target InshaALLAH SWT + Daily Spending — side by side */}
             <div style={{ display: "flex", gap: "22px", flexWrap: "wrap", marginBottom: "22px" }}>
-              {dailyTarget != null && (
-                <section className="sa-balance-section" style={{
-                  flex: "1 1 260px", textAlign: "center", padding: "26px 20px",
-                  border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
-                  background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
-                  minHeight: "190px", boxSizing: "border-box",
-                  display: "flex", flexDirection: "column", justifyContent: "center",
-                }}>
-                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
-                    Daily Target InshaALLAH SWT
-                    <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
-                      {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-                      {tomorrowTarget != null && (
-                        <span style={{ color: "rgba(201,168,76,0.4)" }}> · tomorrow {fmt(tomorrowTarget)} {CURRENCY}</span>
-                      )}
-                    </span>
-                  </div>
-                  <div style={{
-                    fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
-                    background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+              {actualTarget != null && (() => {
+                const reached = actualTarget <= 0;
+                return (
+                  <section className="sa-balance-section" style={{
+                    flex: "1 1 260px", textAlign: "center", padding: "26px 20px",
+                    border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
+                    background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
+                    minHeight: "190px", boxSizing: "border-box",
+                    display: "flex", flexDirection: "column", justifyContent: "center",
                   }}>
-                    {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
-                  </div>
-                  <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
-                    <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: "linear-gradient(90deg, #7A5C0A 0%, #C9A84C 50%, #F5D98B 100%)", transition: "width 0.7s ease" }} />
+                    <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
+                      Actual Target InshaALLAH SWT
+                      <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
+                        {new Date().toLocaleDateString("en-US", { month: "long" })} · {calDaysLeft} day{calDaysLeft === 1 ? "" : "s"} left
+                      </span>
                     </div>
                     <div style={{
-                      fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
-                      background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
-                      WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
+                      ...(reached ? { color: "#3CB371" } : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
                     }}>
-                      {dailyPct}%
+                      {reached ? `+${fmt(Math.round(-actualTarget))}` : fmt(Math.round(actualTarget))} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                     </div>
-                  </div>
-                </section>
-              )}
+                    <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
+                      <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${Math.max(0, Math.min(100, monthlyPct))}%`, background: "linear-gradient(90deg, #7A5C0A 0%, #C9A84C 50%, #F5D98B 100%)", transition: "width 0.7s ease" }} />
+                      </div>
+                      <div style={{
+                        fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
+                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
+                        WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+                      }}>
+                        {fmt(Math.round(tradingMonth))} / {fmt(planSummary.target)} · {monthlyPct}%
+                      </div>
+                    </div>
+                  </section>
+                );
+              })()}
 
               {(() => {
                 const dailyRow = spendRows.find((r) => r.label === "Daily");
@@ -1455,21 +1410,6 @@ export default function App() {
               </div>
             </section>
 
-            {/* Period indicators */}
-            <div className="sa-period-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "14px", marginBottom: "26px" }}>
-              <PeriodChip label="Daily" {...pToday} />
-              <PeriodChip label="Last 7 Days" {...p7} />
-              <PeriodChip label="This Month" {...pMonth} />
-              <PeriodChip label="All Time" {...pAll} />
-            </div>
-
-            {/* Flow chart */}
-            <section className="sa-flow-section" style={{ border: "1px solid rgba(201,168,76,0.18)", borderRadius: "1px", padding: "22px 22px 14px" }}>
-              <div style={{ fontFamily: "'Cormorant', serif", fontSize: "11.5px", letterSpacing: "0.24em", textTransform: "uppercase", color: "rgba(201,168,76,0.75)", marginBottom: "18px" }}>
-                Net Flow — Last 14 Days
-              </div>
-              <FlowChart txs={txs} />
-            </section>
           </div>
         )}
 
@@ -1482,9 +1422,6 @@ export default function App() {
                 No plan published yet — open Special Ashraf Finances in The Process (main app) once to sync this month's target.
               </div>
             ) : (() => {
-              const achieved = period((t) => t.date.startsWith(monthKey())).net;
-              const pct = planSummary.target > 0 ? Math.round((achieved / planSummary.target) * 100) : 0;
-              const pctColor = pct >= 100 ? GOLD_LIGHT : pct >= 60 ? "rgba(201,168,76,0.85)" : "rgba(250,248,243,0.6)";
               return (
                 <>
                   <div className="sa-plan-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "22px" }}>
@@ -1521,45 +1458,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Daily Target InshaALLAH SWT */}
-                  {dailyTarget != null && (
-                    <section className="sa-balance-section" style={{
-                      textAlign: "center", padding: "26px 20px", marginBottom: "16px",
-                      border: "1px solid rgba(201,168,76,0.2)", borderRadius: "1px",
-                      background: "linear-gradient(150deg, rgba(201,168,76,0.05) 0%, transparent 55%)",
-                      minHeight: "190px", boxSizing: "border-box",
-                      display: "flex", flexDirection: "column", justifyContent: "center",
-                    }}>
-                      <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
-                        Daily Target InshaALLAH SWT
-                        <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
-                          {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-                          {tomorrowTarget != null && (
-                            <span style={{ color: "rgba(201,168,76,0.4)" }}> · tomorrow {fmt(tomorrowTarget)} {CURRENCY}</span>
-                          )}
-                        </span>
-                      </div>
-                      <div style={{
-                        fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
-                        background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
-                      }}>
-                        {fmt(doneTodayMAD)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(dailyTarget)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
-                      </div>
-                      <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
-                        <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${Math.min(100, dailyPct)}%`, background: "linear-gradient(90deg, #7A5C0A 0%, #C9A84C 50%, #F5D98B 100%)", transition: "width 0.7s ease" }} />
-                        </div>
-                        <div style={{
-                      fontFamily: "'Playfair Display', serif", fontSize: "15px", fontWeight: 600, marginTop: "8px",
-                      background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)",
-                      WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
-                    }}>
-                          {dailyPct}%
-                        </div>
-                      </div>
-                    </section>
-                  )}
-
                   {/* Monthly Target */}
                   {planSummary && planSummary.target != null && (
                     <section className="sa-balance-section" style={{
@@ -1572,14 +1470,14 @@ export default function App() {
                       <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "8px", lineHeight: 1.3 }}>
                         Monthly Target
                         <span style={{ display: "block", fontFamily: "'Cormorant', serif", fontStyle: "italic", fontSize: "11.5px", letterSpacing: "normal", textTransform: "none", color: "rgba(201,168,76,0.5)" }}>
-                          {new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })} <span style={{ color: "rgba(201,168,76,0.4)" }}>(-{workingDaysLeft})</span>
+                          {new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })} <span style={{ color: "rgba(201,168,76,0.4)" }}>· {calDaysLeft} day{calDaysLeft === 1 ? "" : "s"} left</span>
                         </span>
                       </div>
                       <div style={{
                         fontFamily: "'Playfair Display', serif", fontSize: "22px", fontWeight: 600,
                         background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
                       }}>
-                        {fmt(pMonth.net)} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
+                        {fmt(Math.round(tradingMonth))} <span style={{ fontSize: "13px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>/</span> {fmt(planSummary.target)} <span style={{ fontSize: "12px", fontFamily: "'Cormorant', serif", color: "rgba(201,168,76,0.55)", WebkitTextFillColor: "initial" }}>{CURRENCY}</span>
                       </div>
                       <div style={{ margin: "12px auto 0", width: "min(260px, 90%)" }}>
                         <div style={{ height: "5px", background: "rgba(250,248,243,0.06)", borderRadius: "2px", overflow: "hidden" }}>
