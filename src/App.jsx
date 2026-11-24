@@ -1243,18 +1243,6 @@ export default function App() {
               {/* Invested / To Spend */}
               <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "28px", marginTop: "24px", paddingTop: "20px", borderTop: "1px solid rgba(201,168,76,0.15)" }}>
                 <div style={{ textAlign: "center", flex: 1 }}>
-                  <div style={{ fontFamily: "'Cormorant', serif", fontSize: "10.5px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,168,76,0.65)", marginBottom: "6px" }}>Level</div>
-                  <div style={{
-                    fontFamily: "'Playfair Display', serif", fontSize: "20px", fontWeight: 600,
-                    ...(!planSummary?.monthlyStartingBalances
-                      ? { color: "rgba(201,168,76,0.4)" }
-                      : { background: "linear-gradient(160deg, #F5D98B 0%, #C9A84C 45%, #7A5C0A 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }),
-                  }}>
-                    {!planSummary?.monthlyStartingBalances ? "—" : planSummary.monthlyStartingBalances.filter((sb) => balance >= sb).length}
-                  </div>
-                </div>
-                <div style={{ width: "1px", background: "rgba(201,168,76,0.2)" }} />
-                <div style={{ textAlign: "center", flex: 1 }}>
                   <div style={{
                     fontFamily: "'Playfair Display', serif", fontSize: "18px", fontWeight: 700, lineHeight: 1.3,
                     ...(paceInfo ? paceInfo.style : { color: "rgba(201,168,76,0.4)" }),
